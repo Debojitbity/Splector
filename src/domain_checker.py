@@ -24,7 +24,7 @@ from aiohttp import (
 # BASE PATHS
 # =========================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 EXCEL_FILE = BASE_DIR / "data" / "links.xlsx"
 
