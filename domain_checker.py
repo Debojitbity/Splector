@@ -4,8 +4,11 @@ import pandas as pd
 import socket
 import time
 import shutil
+import random
 
+from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse
 
 from aiohttp import (
     ClientConnectorError,
@@ -18,10 +21,18 @@ from aiohttp import (
 )
 
 # =========================================================
-# CONFIGURATION
+# BASE PATHS
 # =========================================================
 
-EXCEL_FILE = "data/links.xlsx"
+BASE_DIR = Path(__file__).resolve().parent
+
+EXCEL_FILE = BASE_DIR / "data" / "links.xlsx"
+
+TEMP_FILE = BASE_DIR / "data" / "links_temp.xlsx"
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 SHEETS = [
     "production",
@@ -32,35 +43,120 @@ SHEETS = [
 CONCURRENCY_LIMIT = 50
 TIMEOUT_SECONDS = 15
 
-HEADERS = {
-    "User-Agent": (
+# =========================================================
+# ALLOWED REDIRECT SUFFIXES
+# =========================================================
+
+ALLOWED_SUFFIXES = [
+    "gov.in",
+    "nic.in",
+    "ac.in",
+    "edu.in",
+    "res.in",
+    "mil.in"
+]
+
+# =========================================================
+# USER AGENTS
+# =========================================================
+
+USER_AGENTS = [
+
+    (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36"
+    ),
+
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
+        "Gecko/20100101 Firefox/125.0"
+    ),
+
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36 Edg/124.0"
+    ),
+
+    (
+        "Mozilla/5.0 (Linux; Android 13; SM-S918B) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Mobile Safari/537.36"
+    ),
+
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+        "Version/17.4 Safari/605.1.15"
     )
-}
+]
 
 # =========================================================
-# SNAPSHOT BACKUP
+# BACKUP
 # =========================================================
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-BACKUP_FILE = f"data/links_snapshot_{timestamp}.xlsx"
+BACKUP_FILE = (
+    BASE_DIR /
+    "data" /
+    f"links_snapshot_{timestamp}.xlsx"
+)
 
-print(f"\n[BACKUP] Creating snapshot: {BACKUP_FILE}")
+print(f"\n[BACKUP] Creating snapshot: {BACKUP_FILE.name}")
 
 shutil.copy2(EXCEL_FILE, BACKUP_FILE)
 
 # =========================================================
-# HEALTH CLASSIFIER
+# SANITIZER
 # =========================================================
 
-def classify_health(row):
+def sanitize_excel(value):
 
-    reason = str(row["reason"])
+    if not isinstance(value, str):
+        return value
 
-    if row["reachable"] is True:
+    value = value.strip()
+
+    if value.startswith(("=", "+", "-", "@")):
+        value = "'" + value
+
+    return value
+
+# =========================================================
+# DOMAIN POLICY
+# =========================================================
+
+def is_allowed_domain(url):
+
+    try:
+
+        parsed = urlparse(url)
+
+        hostname = parsed.hostname
+
+        if not hostname:
+            return False
+
+        hostname = hostname.lower()
+
+        return any(
+            hostname == suffix or
+            hostname.endswith("." + suffix)
+            for suffix in ALLOWED_SUFFIXES
+        )
+
+    except Exception:
+        return False
+
+# =========================================================
+# HEALTH CLASSIFICATION
+# =========================================================
+
+def classify_health(reason, reachable):
+
+    if reachable:
         return "LIVE"
 
     if reason == "DNS Failure":
@@ -73,14 +169,15 @@ def classify_health(row):
         "ServerDisconnectedError",
         "ClientResponseError",
         "ClientOSError",
-        "Too Many Redirects"
+        "Too Many Redirects",
+        "External Redirect Blocked"
     ]:
         return "UNSTABLE"
 
     return "UNKNOWN"
 
 # =========================================================
-# DOMAIN CHECKER
+# REQUEST
 # =========================================================
 
 async def check_domain(session, domain, semaphore):
@@ -88,7 +185,7 @@ async def check_domain(session, domain, semaphore):
     async with semaphore:
 
         result = {
-            "domain": domain,
+            "domain": sanitize_excel(domain),
             "reachable": False,
             "status_code": "",
             "reason": "",
@@ -114,20 +211,35 @@ async def check_domain(session, domain, semaphore):
                     ssl=False
                 ) as response:
 
+                    final_url = str(response.url)
+
+                    if not is_allowed_domain(final_url):
+
+                        result["reason"] = (
+                            "External Redirect Blocked"
+                        )
+
+                        result["final_url"] = sanitize_excel(
+                            final_url
+                        )
+
+                        return result
+
+                    await response.content.read(256)
+
                     elapsed = round(
                         (time.perf_counter() - start) * 1000,
                         2
                     )
-
-                    # Read tiny chunk only
-                    await response.content.read(256)
 
                     result.update({
                         "reachable": True,
                         "status_code": response.status,
                         "reason": "OK",
                         "response_time_ms": elapsed,
-                        "final_url": str(response.url)
+                        "final_url": sanitize_excel(
+                            final_url
+                        )
                     })
 
                     print(
@@ -138,10 +250,6 @@ async def check_domain(session, domain, semaphore):
                     )
 
                     return result
-
-            # =================================================
-            # ERROR HANDLING
-            # =================================================
 
             except asyncio.TimeoutError:
                 result["reason"] = "Timeout"
@@ -174,11 +282,7 @@ async def check_domain(session, domain, semaphore):
             except Exception as e:
                 result["reason"] = type(e).__name__
 
-        print(
-            f"[FAIL] "
-            f"{domain} "
-            f"-> {result['reason']}"
-        )
+        print(f"[FAIL] {domain} -> {result['reason']}")
 
         return result
 
@@ -186,11 +290,11 @@ async def check_domain(session, domain, semaphore):
 # PROCESS SHEET
 # =========================================================
 
-async def process_sheet(sheet_name, old_df):
+async def process_sheet(sheet_name, old_df, session):
 
-    print(f"\n{'='*70}")
-    print(f"PROCESSING SHEET: {sheet_name.upper()}")
-    print(f"{'='*70}")
+    print(f"\n{'='*80}")
+    print(f"PROCESSING: {sheet_name.upper()}")
+    print(f"{'='*80}")
 
     domains = (
         old_df["domain"]
@@ -203,39 +307,19 @@ async def process_sheet(sheet_name, old_df):
 
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
-    timeout = aiohttp.ClientTimeout(
-        total=TIMEOUT_SECONDS
-    )
+    tasks = [
+        check_domain(session, domain, semaphore)
+        for domain in domains
+    ]
 
-    connector = aiohttp.TCPConnector(
-        ssl=False,
-        limit=CONCURRENCY_LIMIT,
-        ttl_dns_cache=300
-    )
+    results = []
 
-    async with aiohttp.ClientSession(
-        headers=HEADERS,
-        timeout=timeout,
-        connector=connector
-    ) as session:
+    for task in asyncio.as_completed(tasks):
 
-        tasks = [
-            check_domain(session, domain, semaphore)
-            for domain in domains
-        ]
-
-        results = []
-
-        for completed_task in asyncio.as_completed(tasks):
-
-            result = await completed_task
-            results.append(result)
+        result = await task
+        results.append(result)
 
     new_df = pd.DataFrame(results)
-
-    # =====================================================
-    # COMPARISON ENGINE
-    # =====================================================
 
     comparison = old_df.merge(
         new_df,
@@ -265,49 +349,32 @@ async def process_sheet(sheet_name, old_df):
         ]
     )
 
-    # =====================================================
-    # HEALTH CLASSIFICATION
-    # =====================================================
-
     new_df["health"] = new_df.apply(
-        classify_health,
+        lambda row: classify_health(
+            row["reason"],
+            row["reachable"]
+        ),
         axis=1
     )
 
-    # =====================================================
-    # SUMMARY
-    # =====================================================
-
-    live_count = len(
-        new_df[new_df["health"] == "LIVE"]
-    )
-
-    dead_count = len(
-        new_df[new_df["health"] == "DEAD"]
-    )
-
-    unstable_count = len(
-        new_df[new_df["health"] == "UNSTABLE"]
-    )
-
-    avg_response = round(
-        pd.to_numeric(
-            new_df["response_time_ms"],
-            errors="coerce"
-        ).mean(),
-        2
-    )
-
     summary = {
-        "sheet": sheet_name,
-        "total": len(new_df),
-        "live": live_count,
-        "dead": dead_count,
-        "unstable": unstable_count,
-        "avg_ms": avg_response,
-        "recovered": recovered,
-        "degraded": degraded,
-        "reason_changed": reason_changed
+        "Sheet": sheet_name,
+        "Total Domains": len(new_df),
+        "Live": len(new_df[new_df["health"] == "LIVE"]),
+        "Dead": len(new_df[new_df["health"] == "DEAD"]),
+        "Unstable": len(
+            new_df[new_df["health"] == "UNSTABLE"]
+        ),
+        "Recovered": recovered,
+        "Degraded": degraded,
+        "Reason Changed": reason_changed,
+        "Average Response (ms)": round(
+            pd.to_numeric(
+                new_df["response_time_ms"],
+                errors="coerce"
+            ).mean(),
+            2
+        )
     }
 
     return new_df, summary
@@ -318,145 +385,152 @@ async def process_sheet(sheet_name, old_df):
 
 async def main():
 
-    print("\n[LOADING EXCEL FILE]")
+    print("\n[LOADING WORKBOOK]")
 
-    excel = pd.ExcelFile(EXCEL_FILE)
-
-    # =====================================================
-    # OVERWRITE ORIGINAL FILE ONLY
-    # =====================================================
-
-    writer = pd.ExcelWriter(
+    excel = pd.ExcelFile(
         EXCEL_FILE,
-        engine="openpyxl",
-        mode="w"
+        engine="openpyxl"
     )
+
+    timeout = aiohttp.ClientTimeout(
+        total=TIMEOUT_SECONDS
+    )
+
+    connector = aiohttp.TCPConnector(
+        ssl=False,
+        limit=CONCURRENCY_LIMIT,
+        ttl_dns_cache=300
+    )
+
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS)
+    }
 
     global_summary = []
 
-    for sheet in SHEETS:
+    async with aiohttp.ClientSession(
+        headers=headers,
+        timeout=timeout,
+        connector=connector
+    ) as session:
 
-        if sheet not in excel.sheet_names:
+        with pd.ExcelWriter(
+            TEMP_FILE,
+            engine="openpyxl"
+        ) as writer:
 
-            print(f"[SKIP] Missing sheet: {sheet}")
-            continue
+            total_domains = 0
+            total_live = 0
+            total_dead = 0
+            total_unstable = 0
 
-        # =================================================
-        # LOAD OLD DATA
-        # =================================================
+            for sheet in SHEETS:
 
-        old_df = pd.read_excel(
-            EXCEL_FILE,
-            sheet_name=sheet
-        )
+                if sheet not in excel.sheet_names:
+                    continue
 
-        # =================================================
-        # PROCESS
-        # =================================================
+                old_df = pd.read_excel(
+                    EXCEL_FILE,
+                    sheet_name=sheet,
+                    engine="openpyxl"
+                )
 
-        new_df, summary = await process_sheet(
-            sheet,
-            old_df
-        )
+                new_df, summary = await process_sheet(
+                    sheet,
+                    old_df,
+                    session
+                )
 
-        global_summary.append(summary)
+                export_df = new_df[[
+                    "domain",
+                    "reachable",
+                    "status_code",
+                    "reason",
+                    "response_time_ms",
+                    "final_url"
+                ]]
 
-        # =================================================
-        # REMOVE INTERNAL HEALTH COLUMN
-        # =================================================
+                export_df.to_excel(
+                    writer,
+                    sheet_name=sheet,
+                    index=False
+                )
 
-        export_df = new_df[[
-            "domain",
-            "reachable",
-            "status_code",
-            "reason",
-            "response_time_ms",
-            "final_url"
-        ]]
+                global_summary.append(summary)
 
-        # =================================================
-        # OVERWRITE SHEET
-        # =================================================
+                total_domains += summary["Total Domains"]
+                total_live += summary["Live"]
+                total_dead += summary["Dead"]
+                total_unstable += summary["Unstable"]
 
-        export_df.to_excel(
-            writer,
-            sheet_name=sheet,
-            index=False
-        )
+            health_score = round(
+                (total_live / total_domains) * 100,
+                2
+            )
+
+            summary_df = pd.DataFrame(global_summary)
+
+            totals_df = pd.DataFrame([
+                {
+                    "Metric": "Total Domains",
+                    "Value": total_domains
+                },
+                {
+                    "Metric": "Live Domains",
+                    "Value": total_live
+                },
+                {
+                    "Metric": "Dead Domains",
+                    "Value": total_dead
+                },
+                {
+                    "Metric": "Unstable Domains",
+                    "Value": total_unstable
+                },
+                {
+                    "Metric": "Infrastructure Health Score",
+                    "Value": f"{health_score}%"
+                },
+                {
+                    "Metric": "Snapshot Backup",
+                    "Value": BACKUP_FILE.name
+                }
+            ])
+
+            summary_df.to_excel(
+                writer,
+                sheet_name="Summary",
+                index=False,
+                startrow=0
+            )
+
+            totals_df.to_excel(
+                writer,
+                sheet_name="Summary",
+                index=False,
+                startrow=len(summary_df) + 3
+            )
 
     # =====================================================
-    # SAVE UPDATED WORKBOOK
+    # SAFE REPLACEMENT
     # =====================================================
 
-    writer.close()
+    shutil.move(TEMP_FILE, EXCEL_FILE)
 
-    # =====================================================
-    # BEAUTIFUL TERMINAL SUMMARY
-    # =====================================================
-
-    print("\n")
+    print("\n" + "=" * 80)
+    print("SPLECTOR INFRASTRUCTURE UPDATE COMPLETE")
     print("=" * 80)
-    print("SPLECTOR INFRASTRUCTURE SUMMARY")
-    print("=" * 80)
-
-    total_live = 0
-    total_dead = 0
-    total_unstable = 0
-    total_domains = 0
-
-    for s in global_summary:
-
-        total_live += s["live"]
-        total_dead += s["dead"]
-        total_unstable += s["unstable"]
-        total_domains += s["total"]
-
-        print(f"""
-[{s['sheet'].upper()}]
-
-Total Domains   : {s['total']}
-Live            : {s['live']}
-Dead            : {s['dead']}
-Unstable        : {s['unstable']}
-Recovered       : {s['recovered']}
-Degraded        : {s['degraded']}
-Reason Changed  : {s['reason_changed']}
-Avg Response    : {s['avg_ms']} ms
-""")
-
-    print("=" * 80)
-
-    live_percentage = round(
-        (total_live / total_domains) * 100,
-        2
-    )
 
     print(f"""
-GLOBAL TOTALS
+Main Workbook Updated:
+{EXCEL_FILE.name}
 
-Total Domains      : {total_domains}
-Live Domains       : {total_live}
-Dead Domains       : {total_dead}
-Unstable Domains   : {total_unstable}
-Infrastructure Health Score : {live_percentage}%
+Snapshot Backup Created:
+{BACKUP_FILE.name}
 """)
-
-    print("=" * 80)
-
-    print(f"""
-FILES
-
-Snapshot Backup:
-{BACKUP_FILE}
-
-Updated Main Workbook:
-{EXCEL_FILE}
-""")
-
-    print("=" * 80)
 
 # =========================================================
-# ENTRY POINT
+# ENTRY
 # =========================================================
 
 if __name__ == "__main__":
