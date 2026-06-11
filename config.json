@@ -1,0 +1,14 @@
+{
+  "cf_worker_proxy_url": "https://splector-proxy.debojitdasbity.workers.dev/?target=",
+  "input_excel": "data/links.xlsx",
+  "input_sheet": "production",
+  "concurrency_limit": 80,
+  "timeout_seconds": 15,
+  "db_path": "data/crawler.db",
+  "continue_on_stage_error": true,
+  "sheets": [
+    "production",
+    "temporary",
+    "unstable"
+  ]
+}

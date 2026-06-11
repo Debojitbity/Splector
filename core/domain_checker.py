@@ -5,6 +5,7 @@ import socket
 import time
 import shutil
 import random
+import os
 
 from pathlib import Path
 from datetime import datetime
@@ -19,29 +20,6 @@ from aiohttp import (
     ServerDisconnectedError,
     TooManyRedirects
 )
-
-# =========================================================
-# BASE PATHS
-# =========================================================
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-EXCEL_FILE = BASE_DIR / "data" / "links.xlsx"
-
-TEMP_FILE = BASE_DIR / "data" / "links_temp.xlsx"
-
-# =========================================================
-# CONFIG
-# =========================================================
-
-SHEETS = [
-    "production",
-    "temporary",
-    "unstable"
-]
-
-CONCURRENCY_LIMIT = 50
-TIMEOUT_SECONDS = 15
 
 # =========================================================
 # ALLOWED REDIRECT SUFFIXES
@@ -61,30 +39,25 @@ ALLOWED_SUFFIXES = [
 # =========================================================
 
 USER_AGENTS = [
-
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36"
     ),
-
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
         "Gecko/20100101 Firefox/125.0"
     ),
-
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36 Edg/124.0"
     ),
-
     (
         "Mozilla/5.0 (Linux; Android 13; SM-S918B) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Mobile Safari/537.36"
     ),
-
     (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/605.1.15 (KHTML, like Gecko) "
@@ -92,76 +65,34 @@ USER_AGENTS = [
     )
 ]
 
-# =========================================================
-# BACKUP
-# =========================================================
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-BACKUP_FILE = (
-    BASE_DIR /
-    "data" /
-    f"links_snapshot_{timestamp}.xlsx"
-)
-
-print(f"\n[BACKUP] Creating snapshot: {BACKUP_FILE.name}")
-
-shutil.copy2(EXCEL_FILE, BACKUP_FILE)
-
-# =========================================================
-# SANITIZER
-# =========================================================
-
 def sanitize_excel(value):
-
     if not isinstance(value, str):
         return value
-
     value = value.strip()
-
     if value.startswith(("=", "+", "-", "@")):
         value = "'" + value
-
     return value
 
-# =========================================================
-# DOMAIN POLICY
-# =========================================================
-
 def is_allowed_domain(url):
-
     try:
-
         parsed = urlparse(url)
-
         hostname = parsed.hostname
-
         if not hostname:
             return False
-
         hostname = hostname.lower()
-
         return any(
             hostname == suffix or
             hostname.endswith("." + suffix)
             for suffix in ALLOWED_SUFFIXES
         )
-
     except Exception:
         return False
 
-# =========================================================
-# HEALTH CLASSIFICATION
-# =========================================================
-
 def classify_health(reason, reachable):
-
     if reachable:
         return "LIVE"
-
     if reason == "DNS Failure":
         return "DEAD"
-
     if reason in [
         "Timeout",
         "Connection Failed",
@@ -173,17 +104,16 @@ def classify_health(reason, reachable):
         "External Redirect Blocked"
     ]:
         return "UNSTABLE"
-
     return "UNKNOWN"
 
-# =========================================================
-# REQUEST
-# =========================================================
+async def check_domain(session, domain, semaphore, timeout_seconds, pause_event, cancel_event):
+    if not pause_event.is_set():
+        await pause_event.wait()
 
-async def check_domain(session, domain, semaphore):
+    if cancel_event.is_set():
+        return None
 
     async with semaphore:
-
         result = {
             "domain": sanitize_excel(domain),
             "reachable": False,
@@ -199,14 +129,11 @@ async def check_domain(session, domain, semaphore):
         ]
 
         for url in urls:
-
             start = time.perf_counter()
-
             try:
-
                 async with session.get(
                     url,
-                    timeout=TIMEOUT_SECONDS,
+                    timeout=timeout_seconds,
                     allow_redirects=True,
                     ssl=False
                 ) as response:
@@ -214,87 +141,49 @@ async def check_domain(session, domain, semaphore):
                     final_url = str(response.url)
 
                     if not is_allowed_domain(final_url):
-
-                        result["reason"] = (
-                            "External Redirect Blocked"
-                        )
-
-                        result["final_url"] = sanitize_excel(
-                            final_url
-                        )
-
+                        result["reason"] = "External Redirect Blocked"
+                        result["final_url"] = sanitize_excel(final_url)
                         return result
 
                     await response.content.read(256)
-
-                    elapsed = round(
-                        (time.perf_counter() - start) * 1000,
-                        2
-                    )
+                    elapsed = round((time.perf_counter() - start) * 1000, 2)
 
                     result.update({
                         "reachable": True,
                         "status_code": response.status,
                         "reason": "OK",
                         "response_time_ms": elapsed,
-                        "final_url": sanitize_excel(
-                            final_url
-                        )
+                        "final_url": sanitize_excel(final_url)
                     })
-
-                    print(
-                        f"[OK] "
-                        f"{domain} "
-                        f"{response.status} "
-                        f"{elapsed}ms"
-                    )
 
                     return result
 
             except asyncio.TimeoutError:
                 result["reason"] = "Timeout"
-
             except ClientSSLError:
                 result["reason"] = "SSL Error"
-
             except ClientConnectorError as e:
-
                 if isinstance(e.os_error, socket.gaierror):
                     result["reason"] = "DNS Failure"
                 else:
                     result["reason"] = "Connection Failed"
-
             except TooManyRedirects:
                 result["reason"] = "Too Many Redirects"
-
             except ServerDisconnectedError:
                 result["reason"] = "ServerDisconnectedError"
-
             except ClientResponseError:
                 result["reason"] = "ClientResponseError"
-
             except ClientOSError:
                 result["reason"] = "ClientOSError"
-
             except InvalidURL:
                 result["reason"] = "InvalidURL"
-
             except Exception as e:
                 result["reason"] = type(e).__name__
 
-        print(f"[FAIL] {domain} -> {result['reason']}")
-
         return result
 
-# =========================================================
-# PROCESS SHEET
-# =========================================================
-
-async def process_sheet(sheet_name, old_df, session):
-
-    print(f"\n{'='*80}")
-    print(f"PROCESSING: {sheet_name.upper()}")
-    print(f"{'='*80}")
+async def process_sheet(sheet_name, old_df, session, config, emitter, pause_event, cancel_event):
+    emitter.log("INFO", f"PROCESSING: {sheet_name.upper()}")
 
     domains = (
         old_df["domain"]
@@ -305,19 +194,36 @@ async def process_sheet(sheet_name, old_df, session):
         .tolist()
     )
 
-    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+    total_domains = len(domains)
+    emitter.stage_start(1, total_domains)
 
+    semaphore = asyncio.Semaphore(config.concurrency_limit)
     tasks = [
-        check_domain(session, domain, semaphore)
+        check_domain(session, domain, semaphore, config.timeout_seconds, pause_event, cancel_event)
         for domain in domains
     ]
 
     results = []
+    completed = 0
 
     for task in asyncio.as_completed(tasks):
-
         result = await task
+        if result is None:
+            break
         results.append(result)
+        completed += 1
+        
+        # We only have one stage conceptually in this runner, or maybe we don't map perfectly.
+        # Let's map process_sheet loop to stage 1 progress.
+        emitter.stage_progress(1, completed, total_domains)
+        
+        if result["reason"] == "OK":
+            emitter.log("INFO", f"[OK] {result['domain']} {result['status_code']} {result['response_time_ms']}ms")
+        else:
+            emitter.log("WARNING", f"[FAIL] {result['domain']} -> {result['reason']}")
+
+    if not results:
+        return pd.DataFrame(), {}
 
     new_df = pd.DataFrame(results)
 
@@ -379,26 +285,23 @@ async def process_sheet(sheet_name, old_df, session):
 
     return new_df, summary
 
-# =========================================================
-# MAIN
-# =========================================================
+import sqlite3
 
-async def main():
+async def run_domain_checker(config, emitter, pause_event, cancel_event):
+    emitter.pipeline_status("running")
+    emitter.log("INFO", "══════════════════════════════════════════════════════")
+    emitter.log("INFO", "SPLECTOR INFRASTRUCTURE HEALTH CHECK")
+    emitter.log("INFO", "══════════════════════════════════════════════════════")
 
-    print("\n[LOADING WORKBOOK]")
+    db_file = config.abs_db_path
+    sheets = ["production", "temporary", "unstable"]
 
-    excel = pd.ExcelFile(
-        EXCEL_FILE,
-        engine="openpyxl"
-    )
+    emitter.log("INFO", "[LOADING DOMAINS FROM SQLITE]")
 
-    timeout = aiohttp.ClientTimeout(
-        total=TIMEOUT_SECONDS
-    )
-
+    timeout = aiohttp.ClientTimeout(total=config.timeout_seconds)
     connector = aiohttp.TCPConnector(
         ssl=False,
-        limit=CONCURRENCY_LIMIT,
+        limit=config.concurrency_limit,
         ttl_dns_cache=300
     )
 
@@ -414,47 +317,29 @@ async def main():
         connector=connector
     ) as session:
 
-        with pd.ExcelWriter(
-            TEMP_FILE,
-            engine="openpyxl"
-        ) as writer:
-
+        try:
             total_domains = 0
             total_live = 0
             total_dead = 0
             total_unstable = 0
 
-            for sheet in SHEETS:
+            for sheet in sheets:
+                if cancel_event.is_set():
+                    break
 
-                if sheet not in excel.sheet_names:
+                conn_r = sqlite3.connect(db_file)
+                old_df = pd.read_sql_query("SELECT * FROM domains WHERE source_sheet = ?", conn_r, params=[sheet])
+                conn_r.close()
+
+                if old_df.empty:
                     continue
 
-                old_df = pd.read_excel(
-                    EXCEL_FILE,
-                    sheet_name=sheet,
-                    engine="openpyxl"
-                )
-
                 new_df, summary = await process_sheet(
-                    sheet,
-                    old_df,
-                    session
+                    sheet, old_df, session, config, emitter, pause_event, cancel_event
                 )
 
-                export_df = new_df[[
-                    "domain",
-                    "reachable",
-                    "status_code",
-                    "reason",
-                    "response_time_ms",
-                    "final_url"
-                ]]
-
-                export_df.to_excel(
-                    writer,
-                    sheet_name=sheet,
-                    index=False
-                )
+                if new_df.empty:
+                    continue
 
                 global_summary.append(summary)
 
@@ -463,82 +348,46 @@ async def main():
                 total_dead += summary["Dead"]
                 total_unstable += summary["Unstable"]
 
-            health_score = round(
-                (total_live / total_domains) * 100,
-                2
-            )
+                # UPDATE DATABASE
+                with sqlite3.connect(db_file) as conn_w:
+                    conn_w.execute("BEGIN TRANSACTION")
+                    for _, row in new_df.iterrows():
+                        reachable_int = 1 if row["reachable"] else 0
+                        
+                        rt = row["response_time_ms"]
+                        rt_val = float(rt) if pd.notna(rt) and rt != "" else None
 
-            summary_df = pd.DataFrame(global_summary)
+                        conn_w.execute("""
+                            UPDATE domains
+                            SET reachable = ?, status_code = ?, reason = ?, response_time_ms = ?, final_url = ?
+                            WHERE domain = ?
+                        """, (
+                            reachable_int,
+                            str(row["status_code"]),
+                            str(row["reason"]),
+                            rt_val,
+                            str(row["final_url"]),
+                            str(row["domain"])
+                        ))
+                    conn_w.commit()
 
-            totals_df = pd.DataFrame([
-                {
-                    "Metric": "Total Domains",
-                    "Value": total_domains
-                },
-                {
-                    "Metric": "Live Domains",
-                    "Value": total_live
-                },
-                {
-                    "Metric": "Dead Domains",
-                    "Value": total_dead
-                },
-                {
-                    "Metric": "Unstable Domains",
-                    "Value": total_unstable
-                },
-                {
-                    "Metric": "Infrastructure Health Score",
-                    "Value": f"{health_score}%"
-                },
-                {
-                    "Metric": "Snapshot Backup",
-                    "Value": BACKUP_FILE.name
-                }
-            ])
+            if cancel_event.is_set():
+                emitter.log("WARNING", "Health check cancelled by user.")
+                emitter.pipeline_status("cancelled")
+                return
 
-            summary_df.to_excel(
-                writer,
-                sheet_name="Summary",
-                index=False,
-                startrow=0
-            )
+            health_score = round((total_live / total_domains) * 100, 2) if total_domains else 0
+            emitter.log("INFO", f"Infrastructure Health Score: {health_score}%")
 
-            totals_df.to_excel(
-                writer,
-                sheet_name="Summary",
-                index=False,
-                startrow=len(summary_df) + 3
-            )
+        except Exception as e:
+            emitter.log("ERROR", f"Failed during domain checking: {e}")
+            emitter.pipeline_status("error")
+            return
 
-    # =====================================================
-    # SAFE REPLACEMENT
-    # =====================================================
+    emitter.log("INFO", "══════════════════════════════════════════════════════")
+    emitter.log("INFO", "SPLECTOR INFRASTRUCTURE UPDATE COMPLETE")
+    emitter.log("INFO", "══════════════════════════════════════════════════════")
+    emitter.log("INFO", f"Database Updated: {db_file}")
 
-    shutil.move(TEMP_FILE, EXCEL_FILE)
-
-    print("\n" + "=" * 80)
-    print("SPLECTOR INFRASTRUCTURE UPDATE COMPLETE")
-    print("=" * 80)
-
-    print(f"""
-Main Workbook Updated:
-{EXCEL_FILE.name}
-
-Snapshot Backup Created:
-{BACKUP_FILE.name}
-""")
-
-# =========================================================
-# ENTRY
-# =========================================================
-
-if __name__ == "__main__":
-
-    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
-
-        asyncio.set_event_loop_policy(
-            asyncio.WindowsSelectorEventLoopPolicy()
-        )
-
-    asyncio.run(main())
+    emitter.stage_complete(1)
+    emitter.pipeline_status("completed")

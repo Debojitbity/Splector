@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- ============================================= -->
+<!-- STATS CARDS ROW                               -->
+<!-- ============================================= -->
+<section class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+
+    <!-- Domains Loaded -->
+    <div class="glass-card group hover:border-blue-500/30 transition-all duration-300">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-1">Domains Loaded</p>
+                <p class="text-3xl font-bold text-white tabular-nums" id="stat-domains">0</p>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-600/10 flex items-center justify-center border border-blue-500/10 group-hover:border-blue-500/30 transition-colors">
+                <svg class="w-6 h-6 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
+                </svg>
+            </div>
+        </div>
+        <div class="mt-3 h-1 rounded-full bg-slate-800 overflow-hidden">
+            <div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-700" id="stat-domains-bar" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <!-- URLs Filtered -->
+    <div class="glass-card group hover:border-cyan-500/30 transition-all duration-300">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-1">URLs Filtered</p>
+                <p class="text-3xl font-bold text-white tabular-nums" id="stat-urls">0</p>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-teal-600/10 flex items-center justify-center border border-cyan-500/10 group-hover:border-cyan-500/30 transition-colors">
+                <svg class="w-6 h-6 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/>
+                </svg>
+            </div>
+        </div>
+        <div class="mt-3 h-1 rounded-full bg-slate-800 overflow-hidden">
+            <div class="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-400 transition-all duration-700" id="stat-urls-bar" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <!-- Final Documents -->
+    <div class="glass-card group hover:border-emerald-500/30 transition-all duration-300">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-1">Final Documents</p>
+                <p class="text-3xl font-bold text-white tabular-nums" id="stat-docs">0</p>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500/20 to-green-600/10 flex items-center justify-center border border-emerald-500/10 group-hover:border-emerald-500/30 transition-colors">
+                <svg class="w-6 h-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+                </svg>
+            </div>
+        </div>
+        <div class="mt-3 h-1 rounded-full bg-slate-800 overflow-hidden">
+            <div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-green-400 transition-all duration-700" id="stat-docs-bar" style="width: 0%"></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================= -->
+<!-- PIPELINE CONTROL + PROGRESS                   -->
+<!-- ============================================= -->
+<section class="glass-card mb-6">
+    <!-- Header Row -->
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full bg-violet-500 animate-pulse"></div>
+            <h2 class="text-base font-semibold text-white tracking-tight">Pipeline Control</h2>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="flex items-center gap-2">
+            <!-- Task Selector -->
+            <select id="task-selector" class="bg-slate-800/80 text-white text-sm font-medium rounded-lg border border-slate-700/50 px-4 py-2 outline-none focus:border-blue-500 hover:bg-slate-800 transition-all cursor-pointer">
+                <option value="full_scraper">Run Full Scraper (Stages 1-4)</option>
+                <option value="daily_scraper">Run Daily Scraper (Stages 2-4)</option>
+                <option value="domain_checker">Run Infrastructure Health Check</option>
+                <option value="domain_grader">Run Reliability Grader</option>
+            </select>
+            
+            <button id="btn-start" onclick="startPipeline()"
+                    class="control-btn control-btn-start">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/>
+                </svg>
+                Start
+            </button>
+            <button id="btn-pause" onclick="pausePipeline()" disabled
+                    class="control-btn control-btn-pause">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5"/>
+                </svg>
+                Pause
+            </button>
+            <button id="btn-stop" onclick="stopPipeline()" disabled
+                    class="control-btn control-btn-stop">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z"/>
+                </svg>
+                Stop
+            </button>
+
+            <!-- Config Gear -->
+            <button id="btn-config" onclick="toggleConfig()"
+                    class="ml-2 p-2.5 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:text-white hover:border-slate-600 transition-all duration-200">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- 4 Stage Progress Bars -->
+    <div class="space-y-4">
+        <!-- Stage 1: Domain Loading -->
+        <div class="progress-stage" id="stage-1-wrapper">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="stage-badge stage-badge-blue">1</span>
+                    <span class="text-sm font-medium text-slate-300">Domain Loading</span>
+                </div>
+                <span class="text-xs font-mono text-slate-500" id="stage-1-label">0 / 0</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill progress-fill-blue" id="stage-1-bar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Stage 2: Homepage Discovery -->
+        <div class="progress-stage" id="stage-2-wrapper">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="stage-badge stage-badge-cyan">2</span>
+                    <span class="text-sm font-medium text-slate-300">Homepage Discovery</span>
+                </div>
+                <span class="text-xs font-mono text-slate-500" id="stage-2-label">0 / 0</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill progress-fill-cyan" id="stage-2-bar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Stage 3: Lexical Triage -->
+        <div class="progress-stage" id="stage-3-wrapper">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="stage-badge stage-badge-violet">3</span>
+                    <span class="text-sm font-medium text-slate-300">Lexical Triage & Sanitization</span>
+                </div>
+                <span class="text-xs font-mono text-slate-500" id="stage-3-label">0 / 0</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill progress-fill-violet" id="stage-3-bar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Stage 4: Deep Extraction -->
+        <div class="progress-stage" id="stage-4-wrapper">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="stage-badge stage-badge-emerald">4</span>
+                    <span class="text-sm font-medium text-slate-300">Deep Extraction</span>
+                </div>
+                <span class="text-xs font-mono text-slate-500" id="stage-4-label">0 / 0</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill progress-fill-emerald" id="stage-4-bar" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================= -->
+<!-- LIVE TERMINAL                                 -->
+<!-- ============================================= -->
+<section class="glass-card">
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+            <div class="flex gap-1.5">
+                <div class="w-3 h-3 rounded-full bg-red-500/80"></div>
+                <div class="w-3 h-3 rounded-full bg-amber-500/80"></div>
+                <div class="w-3 h-3 rounded-full bg-emerald-500/80"></div>
+            </div>
+            <h2 class="text-sm font-medium text-slate-400">Live Terminal</h2>
+        </div>
+        <button onclick="clearTerminal()" class="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1 rounded-lg hover:bg-slate-800/50">
+            Clear
+        </button>
+    </div>
+    <div id="terminal" class="terminal-box">
+        <div id="terminal-content">
+            <div class="terminal-line">
+                <span class="text-slate-600 font-mono text-xs">Ready. Click Start to begin the pipeline.</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================= -->
+<!-- CONFIG SLIDE-OVER PANEL                       -->
+<!-- ============================================= -->
+<div id="config-overlay" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden opacity-0 transition-opacity duration-300" onclick="toggleConfig()"></div>
+<div id="config-panel" class="fixed top-0 right-0 h-full w-full max-w-md bg-[#0c1021] border-l border-slate-800/50 z-50 transform translate-x-full transition-transform duration-300 ease-out shadow-2xl">
+    <div class="p-6 h-full flex flex-col">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <h3 class="text-lg font-semibold text-white">Pipeline Configuration</h3>
+            <button onclick="toggleConfig()" class="p-2 rounded-lg hover:bg-slate-800/50 text-slate-400 hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Config Form -->
+        <div class="flex-1 space-y-5 overflow-y-auto">
+            <div class="config-field">
+                <label for="cfg-proxy" class="config-label">Cloudflare Worker Proxy URL</label>
+                <input type="text" id="cfg-proxy" placeholder="https://worker.example.workers.dev/?target=" class="config-input">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="config-field">
+                    <label for="cfg-concurrency" class="config-label">Concurrency Limit</label>
+                    <input type="number" id="cfg-concurrency" min="1" max="500" class="config-input">
+                </div>
+                <div class="config-field">
+                    <label for="cfg-timeout" class="config-label">Timeout (seconds)</label>
+                    <input type="number" id="cfg-timeout" min="1" max="120" class="config-input">
+                </div>
+            </div>
+            <div class="config-field">
+                <label for="cfg-sheet" class="config-label">Input Sheet Name</label>
+                <input type="text" id="cfg-sheet" class="config-input">
+            </div>
+            <div class="config-field">
+                <label for="cfg-continue" class="config-label">Continue on Stage Error</label>
+                <div class="flex items-center gap-3 mt-1">
+                    <button id="cfg-continue" onclick="toggleContinueOnError()" class="toggle-btn" data-active="true">
+                        <span class="toggle-knob"></span>
+                    </button>
+                    <span class="text-sm text-slate-400" id="cfg-continue-label">Enabled</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save Button -->
+        <div class="pt-5 border-t border-slate-800/50">
+            <button onclick="saveConfig()" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white font-semibold text-sm hover:from-blue-500 hover:to-violet-500 transition-all duration-200 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 active:scale-[0.98]">
+                Save Configuration
+            </button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

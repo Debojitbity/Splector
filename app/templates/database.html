@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Database Viewer{% endblock %}
+
+{% block head %}
+<!-- DataTables CSS -->
+<link rel="stylesheet" href="https://cdn.datatables.net/2.1.8/css/dataTables.dataTables.min.css">
+<style>
+    /* DataTables Dark Theme Overrides */
+    .dt-container { color: #cbd5e1; }
+    table.dataTable { border-collapse: collapse !important; }
+    table.dataTable thead th {
+        background: rgba(15, 23, 42, 0.8) !important;
+        color: #94a3b8 !important;
+        border-bottom: 1px solid rgba(51, 65, 85, 0.5) !important;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 14px 16px !important;
+    }
+    table.dataTable tbody td {
+        background: transparent !important;
+        border-bottom: 1px solid rgba(30, 41, 59, 0.4) !important;
+        color: #e2e8f0;
+        font-size: 0.8125rem;
+        padding: 12px 16px !important;
+        max-width: 400px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    table.dataTable tbody tr:hover td {
+        background: rgba(30, 41, 59, 0.5) !important;
+    }
+    table.dataTable tbody tr.odd td { background: rgba(15, 23, 42, 0.3) !important; }
+    table.dataTable tbody tr.even td { background: transparent !important; }
+    table.dataTable tbody tr.odd:hover td,
+    table.dataTable tbody tr.even:hover td { background: rgba(30, 41, 59, 0.5) !important; }
+
+    /* Pagination */
+    .dt-paging .dt-paging-button {
+        background: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(51, 65, 85, 0.3) !important;
+        color: #94a3b8 !important;
+        border-radius: 8px !important;
+        margin: 0 2px !important;
+        padding: 6px 12px !important;
+        font-size: 0.8rem !important;
+    }
+    .dt-paging .dt-paging-button:hover {
+        background: rgba(30, 41, 59, 0.8) !important;
+        color: #e2e8f0 !important;
+    }
+    .dt-paging .dt-paging-button.current {
+        background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
+        color: white !important;
+        border-color: transparent !important;
+    }
+
+    /* Search + Length */
+    .dt-search input {
+        background: rgba(15, 23, 42, 0.8) !important;
+        border: 1px solid rgba(51, 65, 85, 0.5) !important;
+        color: #e2e8f0 !important;
+        border-radius: 10px !important;
+        padding: 8px 14px !important;
+        font-size: 0.8125rem !important;
+        outline: none !important;
+    }
+    .dt-search input:focus {
+        border-color: rgba(59, 130, 246, 0.5) !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+    }
+    .dt-search label,
+    .dt-length label { color: #64748b !important; font-size: 0.8125rem !important; }
+    .dt-length select {
+        background: rgba(15, 23, 42, 0.8) !important;
+        border: 1px solid rgba(51, 65, 85, 0.5) !important;
+        color: #e2e8f0 !important;
+        border-radius: 8px !important;
+        padding: 6px 10px !important;
+        font-size: 0.8125rem !important;
+    }
+    .dt-info { color: #64748b !important; font-size: 0.8125rem !important; }
+    .dt-empty { color: #475569 !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div>
+        <h1 class="text-xl font-bold text-white tracking-tight">Database Viewer</h1>
+        <p class="text-sm text-slate-400 mt-1">Browse and search pipeline output data</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <!-- Table Selector -->
+        <select id="table-selector" onchange="switchTable()" class="px-4 py-2.5 rounded-xl bg-slate-900/80 border border-slate-700/50 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50 transition-colors">
+            <option value="stage4_final_docs" selected>Stage 4 — Final Documents</option>
+            <option value="stage3_filtered">Stage 3 — Filtered URLs</option>
+            <option value="stage2_discovered">Stage 2 — Discovered URLs</option>
+        </select>
+        <!-- Record Count Badge -->
+        <div class="px-4 py-2.5 rounded-xl bg-slate-900/80 border border-slate-700/50">
+            <span class="text-xs text-slate-500 uppercase tracking-wider">Records</span>
+            <span class="ml-2 text-sm font-bold text-white tabular-nums" id="total-records">—</span>
+        </div>
+    </div>
+</div>
+
+<!-- Data Table Card -->
+<div class="glass-card overflow-hidden">
+    <div class="overflow-x-auto">
+        <table id="data-table" class="display w-full" style="width:100%">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Parent / Source</th>
+                    <th>Target URL</th>
+                    <th>Anchor Text</th>
+                    <th>Timestamp</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<!-- jQuery + DataTables -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+<script src="{{ url_for('static', filename='js/database.js') }}"></script>
+{% endblock %}
