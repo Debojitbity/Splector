@@ -33,8 +33,8 @@ socket.on('disconnect', () => {
 let currentStatus = 'idle';
 const TERMINAL_MAX_LINES = 500;
 
-const stageTotals = { 1: 0, 2: 0, 3: 0, 4: 0 };
-const stageCurrent = { 1: 0, 2: 0, 3: 0, 4: 0 };
+const stageTotals = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+const stageCurrent = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
 
 
 // =========================================================
@@ -90,9 +90,13 @@ socket.on('log', (data) => {
 
 // --- Stats updates ---
 socket.on('stats', (data) => {
-    updateStat('stat-domains', data.domains_loaded || 0);
-    updateStat('stat-urls', data.urls_filtered || 0);
-    updateStat('stat-docs', data.final_docs || 0);
+    if (data.domains_loaded !== undefined) updateStat('stat-domains', data.domains_loaded || 0);
+    if (data.urls_filtered !== undefined) updateStat('stat-urls', data.urls_filtered || 0);
+    if (data.final_docs !== undefined) updateStat('stat-docs', data.final_docs || 0);
+
+    // Phase 2: Document Processing stats
+    if (data.docs_processed !== undefined) updateStat('stat-extracted', data.docs_processed || 0);
+    if (data.docs_extracted !== undefined) updateStat('stat-extracted', data.docs_extracted || 0);
 });
 
 
@@ -228,6 +232,8 @@ function updateButtonStates(status) {
     const btnStart = document.getElementById('btn-start');
     const btnPause = document.getElementById('btn-pause');
     const btnStop = document.getElementById('btn-stop');
+    const btnSyncImport = document.getElementById('btn-sync-import');
+    const btnSyncExport = document.getElementById('btn-sync-export');
 
     switch (status) {
         case 'idle':
@@ -237,6 +243,8 @@ function updateButtonStates(status) {
             btnStart.disabled = false;
             btnPause.disabled = true;
             btnStop.disabled = true;
+            if (btnSyncImport) btnSyncImport.disabled = false;
+            if (btnSyncExport) btnSyncExport.disabled = false;
 
             // Reset progress bars on idle
             if (status === 'idle' || status === 'cancelled' || status === 'error') {
@@ -255,6 +263,8 @@ function updateButtonStates(status) {
             btnStart.disabled = true;
             btnPause.disabled = false;
             btnStop.disabled = false;
+            if (btnSyncImport) btnSyncImport.disabled = true;
+            if (btnSyncExport) btnSyncExport.disabled = true;
             btnPause.innerHTML = `
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5"/>
@@ -266,6 +276,8 @@ function updateButtonStates(status) {
             btnStart.disabled = true;
             btnPause.disabled = false;
             btnStop.disabled = false;
+            if (btnSyncImport) btnSyncImport.disabled = true;
+            if (btnSyncExport) btnSyncExport.disabled = true;
             btnPause.innerHTML = `
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/>
@@ -277,6 +289,8 @@ function updateButtonStates(status) {
             btnStart.disabled = true;
             btnPause.disabled = true;
             btnStop.disabled = true;
+            if (btnSyncImport) btnSyncImport.disabled = true;
+            if (btnSyncExport) btnSyncExport.disabled = true;
             break;
     }
 }
@@ -288,7 +302,7 @@ function updateButtonStates(status) {
 
 function startPipeline() {
     // Reset progress bars
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 5; i++) {
         const bar = document.getElementById(`stage-${i}-bar`);
         const label = document.getElementById(`stage-${i}-label`);
         if (bar) { bar.style.width = '0%'; bar.classList.remove('active'); }
@@ -311,6 +325,18 @@ function pausePipeline() {
 
 function stopPipeline() {
     socket.emit('pipeline:stop');
+}
+
+function importFromCloud() {
+    clearTerminal();
+    appendTerminalLine('INFO', 'Requesting Cloud Sync (Import)...', '');
+    socket.emit('pipeline:sync_import');
+}
+
+function exportToCloud() {
+    clearTerminal();
+    appendTerminalLine('INFO', 'Requesting Cloud Sync (Export)...', '');
+    socket.emit('pipeline:sync_export');
 }
 
 
@@ -405,6 +431,7 @@ async function pollStats() {
         updateStat('stat-domains', data.domains_loaded || 0);
         updateStat('stat-urls', data.urls_filtered || 0);
         updateStat('stat-docs', data.final_docs || 0);
+        updateStat('stat-extracted', data.docs_extracted || 0);
     } catch (e) {
         // Silently fail — WebSocket will handle it
     }

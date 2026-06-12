@@ -2,7 +2,7 @@
   "cf_worker_proxy_url": "https://splector-proxy.debojitdasbity.workers.dev/?target=",
   "input_excel": "data/links.xlsx",
   "input_sheet": "production",
-  "concurrency_limit": 80,
+  "concurrency_limit": 300,
   "timeout_seconds": 15,
   "db_path": "data/crawler.db",
   "continue_on_stage_error": true,
@@ -10,5 +10,14 @@
     "production",
     "temporary",
     "unstable"
-  ]
+  ],
+  "tesseract_cmd_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "phase2_pdf_folder": "data/phase2_pdf",
+  "phase2_html_folder": "data/phase2_html",
+  "phase2_prepared_data": "data/phase2_prepared",
+  "phase2_reference_store": "data/phase2_archive",
+  "phase2_ocr_languages": "eng+hin",
+  "phase2_min_char_threshold": 10,
+  "phase2_text_char_threshold": 50,
+  "phase2_pdf_page_limit": 3
 }

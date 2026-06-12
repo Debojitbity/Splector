@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from core.db import get_db_connection
 
 def initial_trust_score(source_type):
     if source_type == "production":
@@ -76,7 +77,7 @@ def run_domain_grader(config, emitter):
     emitter.stage_start(1, 1)
 
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection(db_file)
         cursor = conn.cursor()
 
         cursor.execute("""

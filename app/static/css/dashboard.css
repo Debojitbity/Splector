@@ -226,6 +226,7 @@
 .stage-badge-cyan    { background: rgba(6, 182, 212, 0.15);  color: #22d3ee; }
 .stage-badge-violet  { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
 .stage-badge-emerald { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.stage-badge-amber   { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 
 .progress-track {
     height: 8px;
@@ -264,6 +265,7 @@
 .progress-fill-cyan    { background: linear-gradient(90deg, #06b6d4, #22d3ee); }
 .progress-fill-violet  { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 .progress-fill-emerald { background: linear-gradient(90deg, #10b981, #34d399); }
+.progress-fill-amber   { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
 
 /* ============================================= */
 /* TERMINAL                                      */

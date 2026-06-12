@@ -6,10 +6,12 @@ import time
 import shutil
 import random
 import os
+import re
 
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
+from core.db import get_db_connection
 
 from aiohttp import (
     ClientConnectorError,
@@ -285,8 +287,6 @@ async def process_sheet(sheet_name, old_df, session, config, emitter, pause_even
 
     return new_df, summary
 
-import sqlite3
-
 async def run_domain_checker(config, emitter, pause_event, cancel_event):
     emitter.pipeline_status("running")
     emitter.log("INFO", "══════════════════════════════════════════════════════")
@@ -327,9 +327,9 @@ async def run_domain_checker(config, emitter, pause_event, cancel_event):
                 if cancel_event.is_set():
                     break
 
-                conn_r = sqlite3.connect(db_file)
-                old_df = pd.read_sql_query("SELECT * FROM domains WHERE source_sheet = ?", conn_r, params=[sheet])
-                conn_r.close()
+                conn = get_db_connection(db_file)
+                old_df = pd.read_sql_query("SELECT * FROM domains WHERE source_sheet = ?", conn, params=[sheet])
+                conn.close()
 
                 if old_df.empty:
                     continue
@@ -349,7 +349,7 @@ async def run_domain_checker(config, emitter, pause_event, cancel_event):
                 total_unstable += summary["Unstable"]
 
                 # UPDATE DATABASE
-                with sqlite3.connect(db_file) as conn_w:
+                with get_db_connection(db_file) as conn_w:
                     conn_w.execute("BEGIN TRANSACTION")
                     for _, row in new_df.iterrows():
                         reachable_int = 1 if row["reachable"] else 0

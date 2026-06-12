@@ -9,6 +9,11 @@ Opens the dashboard at http://localhost:5000
 
 import logging
 import sys
+import os
+from dotenv import load_dotenv
+
+# Load environment variables (Turso, etc.)
+load_dotenv()
 
 # =========================================================
 # PERSISTENT FILE LOGGING

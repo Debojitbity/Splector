@@ -1,7 +1,9 @@
 import sqlite3
 import pandas as pd
+import shutil
 import urllib.parse
 from pathlib import Path
+from core.db import get_db_connection
 
 def test_migration_integrity():
     base_dir = Path(__file__).resolve().parent.parent
@@ -39,7 +41,7 @@ def test_migration_integrity():
     # Count rows in SQLite
     sqlite_counts = {}
     total_sqlite_rows = 0
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(db_path) as conn:
         for sheet in sheets:
             count = conn.execute("SELECT COUNT(*) FROM domains WHERE source_sheet = ?", (sheet,)).fetchone()[0]
             sqlite_counts[sheet] = count

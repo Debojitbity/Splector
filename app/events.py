@@ -22,9 +22,11 @@ from flask_socketio import emit
 from app import socketio
 from core.config import load_config
 from core.emitter import ProgressEmitter
-from core.scraper import run_pipeline
+from core.scraper import run_pipeline, db_writer_loop
 from core.domain_checker import run_domain_checker
 from core.domain_grader import run_domain_grader
+from core.document_processor import run_document_processing
+from core.turso_sync import import_from_turso, export_to_turso
 
 logger = logging.getLogger("splector.events")
 
@@ -159,6 +161,92 @@ def _run_domain_grader_in_thread(config, emitter):
         pipeline_state["status"] = "idle"
         logger.info("Domain grader thread exited.")
 
+
+def _run_document_processor_in_thread(config, emitter):
+    """
+    Runs the Phase 2 Document Processing Pipeline in a background thread.
+    Creates its own asyncio event loop and db_writer_loop.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(_proactor_exception_handler)
+    pipeline_state["loop"] = loop
+
+    pause_event = asyncio.Event()
+    pause_event.set()  # Start unpaused
+    cancel_event = asyncio.Event()
+
+    pipeline_state["pause_event"] = pause_event
+    pipeline_state["cancel_event"] = cancel_event
+
+    async def _run():
+        # Create dedicated db_queue and db_writer for this pipeline run
+        db_queue = asyncio.Queue()
+        db_writer_task = asyncio.create_task(
+            db_writer_loop(db_queue, config.abs_db_path)
+        )
+
+        try:
+            await run_document_processing(
+                config, emitter, pause_event, cancel_event, db_queue
+            )
+            emitter.pipeline_status("completed")
+        except asyncio.CancelledError:
+            emitter.log("WARNING", "Document processor was cancelled.")
+            emitter.pipeline_status("cancelled")
+        except Exception as e:
+            emitter.log("ERROR", f"Document processor failed: {type(e).__name__}: {e}")
+            emitter.pipeline_status("error")
+        finally:
+            # Send poison pill to db_writer and wait for clean shutdown
+            await db_queue.put(None)
+            await db_writer_task
+            emitter.log("INFO", "Database writer shut down cleanly.")
+
+    try:
+        loop.run_until_complete(_run())
+    except Exception as e:
+        logger.error(f"Document processor thread error: {e}")
+        emitter.pipeline_status("error")
+        emitter.log("ERROR", f"Document processor thread crashed: {e}")
+    finally:
+        loop.close()
+        pipeline_state["loop"] = None
+        pipeline_state["pause_event"] = None
+        pipeline_state["cancel_event"] = None
+        pipeline_state["thread"] = None
+        logger.info("Document processor thread exited.")
+
+# =========================================================
+# CLOUD SYNC RUNNER
+# =========================================================
+
+def _run_sync_in_thread(config, emitter, sync_type: str):
+    """
+    Runs Turso import/export in a background thread.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(_proactor_exception_handler)
+    pipeline_state["loop"] = loop
+
+    try:
+        if sync_type == "import":
+            loop.run_until_complete(import_from_turso(config.abs_db_path, emitter))
+        elif sync_type == "export":
+            loop.run_until_complete(export_to_turso(config.abs_db_path, emitter))
+        emitter.pipeline_status("completed")
+    except Exception as e:
+        logger.error(f"Cloud sync thread error: {e}")
+        emitter.pipeline_status("error")
+        emitter.log("ERROR", f"Cloud sync failed: {e}")
+    finally:
+        loop.close()
+        pipeline_state["loop"] = None
+        pipeline_state["thread"] = None
+        pipeline_state["status"] = "idle"
+        logger.info(f"Cloud sync ({sync_type}) thread exited.")
+
 # =========================================================
 # SOCKETIO EVENT: START
 # =========================================================
@@ -188,6 +276,9 @@ def handle_start(data=None):
     elif task == "daily_scraper":
         target_fn = _run_pipeline_in_thread
         args = (config, emitter, [2, 3, 4])
+    elif task == "document_processor":
+        target_fn = _run_document_processor_in_thread
+        args = (config, emitter)
     else:
         target_fn = _run_pipeline_in_thread
         args = (config, emitter, [1, 2, 3, 4])
@@ -293,6 +384,61 @@ def handle_stop(data=None):
 @socketio.on("pipeline:status")
 def handle_status(data=None):
     emit("pipeline_status", {"status": pipeline_state["status"]})
+
+
+# =========================================================
+# SOCKETIO EVENT: CLOUD SYNC
+# =========================================================
+
+@socketio.on("pipeline:sync_import")
+def handle_sync_import(data=None):
+    if pipeline_state["status"] in ("running", "paused", "stopping"):
+        emit("pipeline_status", {
+            "status": pipeline_state["status"],
+            "message": "Pipeline is active. Cannot sync.",
+        })
+        return
+
+    logger.info("Received pipeline:sync_import event")
+    pipeline_state["status"] = "running"
+    emit("pipeline_status", {"status": "running"})
+
+    config = load_config()
+    emitter = ProgressEmitter(socketio=socketio)
+    
+    thread = threading.Thread(
+        target=_run_sync_in_thread,
+        args=(config, emitter, "import"),
+        daemon=True,
+        name="SplectorPipeline-SyncImport",
+    )
+    pipeline_state["thread"] = thread
+    thread.start()
+
+@socketio.on("pipeline:sync_export")
+def handle_sync_export(data=None):
+    if pipeline_state["status"] in ("running", "paused", "stopping"):
+        emit("pipeline_status", {
+            "status": pipeline_state["status"],
+            "message": "Pipeline is active. Cannot sync.",
+        })
+        return
+
+    logger.info("Received pipeline:sync_export event")
+    pipeline_state["status"] = "running"
+    emit("pipeline_status", {"status": "running"})
+
+    config = load_config()
+    emitter = ProgressEmitter(socketio=socketio)
+    
+    thread = threading.Thread(
+        target=_run_sync_in_thread,
+        args=(config, emitter, "export"),
+        daemon=True,
+        name="SplectorPipeline-SyncExport",
+    )
+    pipeline_state["thread"] = thread
+    thread.start()
 
 
 # =========================================================

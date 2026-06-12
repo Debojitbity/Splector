@@ -30,6 +30,16 @@ SAVEABLE_FIELDS = [
     "db_path",
     "continue_on_stage_error",
     "sheets",
+    # Phase 2: Document Processing
+    "tesseract_cmd_path",
+    "phase2_pdf_folder",
+    "phase2_html_folder",
+    "phase2_prepared_data",
+    "phase2_reference_store",
+    "phase2_ocr_languages",
+    "phase2_min_char_threshold",
+    "phase2_text_char_threshold",
+    "phase2_pdf_page_limit",
 ]
 
 
@@ -49,6 +59,17 @@ class PipelineConfig:
     sheets: List[str] = field(
         default_factory=lambda: ["production", "temporary", "unstable"]
     )
+
+    # --- Phase 2: Document Processing ---
+    tesseract_cmd_path: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    phase2_pdf_folder: str = "data/phase2_pdf"
+    phase2_html_folder: str = "data/phase2_html"
+    phase2_prepared_data: str = "data/phase2_prepared"
+    phase2_reference_store: str = "data/phase2_archive"
+    phase2_ocr_languages: str = "eng+hin"
+    phase2_min_char_threshold: int = 10
+    phase2_text_char_threshold: int = 50
+    phase2_pdf_page_limit: int = 3
 
     # --- Computed at runtime (not saved to config.json) ---
     http_headers: dict = field(default_factory=dict, repr=False)
@@ -83,6 +104,24 @@ class PipelineConfig:
     @property
     def abs_input_excel(self) -> str:
         return str(BASE_DIR / self.input_excel)
+
+    # --- Phase 2 resolved paths ---
+
+    @property
+    def abs_phase2_pdf_folder(self) -> str:
+        return str(BASE_DIR / self.phase2_pdf_folder)
+
+    @property
+    def abs_phase2_html_folder(self) -> str:
+        return str(BASE_DIR / self.phase2_html_folder)
+
+    @property
+    def abs_phase2_prepared_data(self) -> str:
+        return str(BASE_DIR / self.phase2_prepared_data)
+
+    @property
+    def abs_phase2_reference_store(self) -> str:
+        return str(BASE_DIR / self.phase2_reference_store)
 
     def to_dict(self) -> dict:
         """Return only saveable fields for JSON serialization."""

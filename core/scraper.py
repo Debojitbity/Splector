@@ -20,7 +20,6 @@ import asyncio
 import logging
 import os
 import re
-import sqlite3
 import urllib.parse
 from datetime import datetime
 from typing import List, Tuple
@@ -32,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from core.config import PipelineConfig
 from core.emitter import ProgressEmitter
+from core.db import get_db_connection, sync_db
 
 logger = logging.getLogger("splector.pipeline")
 
@@ -196,7 +196,7 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
     """
 
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = get_db_connection(str(db_path), check_same_thread=False)
 
     try:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -243,6 +243,19 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                 final_docs      INTEGER DEFAULT 0
             )
         """)
+        # Phase 2: Unified document processing audit trail
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS document_refs (
+                record_id          TEXT PRIMARY KEY,
+                source_url         TEXT NOT NULL,
+                doc_type           TEXT NOT NULL,
+                prepared_file_path TEXT,
+                archive_file_path  TEXT,
+                processing_status  TEXT NOT NULL,
+                timestamp          TEXT DEFAULT (datetime('now')),
+                UNIQUE(source_url)
+            )
+        """)
         conn.commit()
 
         pending = 0
@@ -255,6 +268,7 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                 # Auto-commit partial batches on timeout
                 if pending > 0:
                     conn.commit()
+                    sync_db(conn)
                     pending = 0
                 continue
             except asyncio.CancelledError:
@@ -291,6 +305,15 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                         "VALUES (?, ?, ?)",
                         values,
                     )
+                elif table == "document_refs":
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO document_refs "
+                        "(record_id, source_url, doc_type, "
+                        " prepared_file_path, archive_file_path, "
+                        " processing_status, timestamp) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        values,
+                    )
                 elif table == "pipeline_start":
                     cursor.execute(
                         "INSERT INTO pipeline_runs (started_at, status) "
@@ -312,6 +335,7 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                         "stage2_discovered",
                         "stage3_filtered",
                         "stage4_final_docs",
+                        "document_refs",
                     }
                     tbl = values[0]
                     if tbl in allowed:
@@ -320,6 +344,7 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                 pending += 1
                 if pending >= BATCH_SIZE:
                     conn.commit()
+                    sync_db(conn)
                     pending = 0
 
             except Exception as e:
@@ -330,6 +355,7 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
         # --- Final flush before close ---
         if pending > 0:
             conn.commit()
+            sync_db(conn)
         logger.info("db_writer_loop shut down cleanly.")
 
     except Exception as e:
@@ -507,7 +533,7 @@ def _lexical_filter_and_sanitize(
 
     Returns: (initial_count, final_count, list_of_filtered_row_tuples)
     """
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = get_db_connection(str(db_path), check_same_thread=False)
     df = pd.read_sql_query(
         "SELECT base_domain, discovered_url, anchor_text "
         "FROM stage2_discovered",
@@ -609,7 +635,7 @@ async def run_pipeline(
             emitter.log("INFO", "Stage 1: Loading reachable domains from Excel...")
 
             try:
-                conn_r = sqlite3.connect(config.abs_db_path)
+                conn_r = get_db_connection(config.abs_db_path)
                 valid_rows = pd.read_sql_query(
                     "SELECT domain FROM domains WHERE source_sheet = ? AND reachable = 1", 
                     conn_r, params=[config.input_sheet]
@@ -649,7 +675,7 @@ async def run_pipeline(
         if 2 in stages:
             if "domains" not in locals():
                 emitter.log("INFO", "Stage 1 bypassed. Loading domains directly from production sheet in SQLite...")
-                conn_r = sqlite3.connect(config.abs_db_path)
+                conn_r = get_db_connection(config.abs_db_path)
                 valid_rows_bypass = pd.read_sql_query(
                     "SELECT domain FROM domains WHERE source_sheet = ? AND reachable = 1", 
                     conn_r, params=[config.input_sheet]
@@ -692,8 +718,8 @@ async def run_pipeline(
             # Flush all stage 2 writes before reading in stage 3
             await db_queue.join()
 
-            # Read actual count from DB
-            conn_r = sqlite3.connect(config.abs_db_path)
+            # Read final count from DB
+            conn_r = get_db_connection(config.abs_db_path)
             discovered_count = conn_r.execute(
                 "SELECT COUNT(*) FROM stage2_discovered"
             ).fetchone()[0]
@@ -759,7 +785,7 @@ async def run_pipeline(
         # STAGE 4: Level 3 Deep-Scrape
         # =====================================================
         if 4 in stages:
-            conn_r = sqlite3.connect(config.abs_db_path)
+            conn_r = get_db_connection(config.abs_db_path)
             parent_urls_df = pd.read_sql_query(
                 "SELECT filtered_url FROM stage3_filtered", conn_r,
             )
@@ -803,7 +829,7 @@ async def run_pipeline(
             # Flush all stage 4 writes
             await db_queue.join()
 
-            conn_r = sqlite3.connect(config.abs_db_path)
+            conn_r = get_db_connection(config.abs_db_path)
             final_doc_count = conn_r.execute(
                 "SELECT COUNT(*) FROM stage4_final_docs"
             ).fetchone()[0]

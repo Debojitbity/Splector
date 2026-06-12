@@ -9,3 +9,12 @@ beautifulsoup4>=4.13
 pandas>=2.2
 openpyxl>=3.1
 python-dotenv>=1.1
+
+# Phase 2: Document Processing
+PyMuPDF>=1.25
+Pillow>=11.0
+pytesseract>=0.3
+
+# Database Sync
+libsql-client>=0.0.8
+python-dotenv>=1.1.0

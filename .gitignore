@@ -1,1 +1,6 @@
 /data
+splector_debug.log
+*.db
+*.sqlite
+.env
+data/crawler.db

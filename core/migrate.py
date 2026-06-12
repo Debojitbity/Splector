@@ -1,7 +1,8 @@
-import sqlite3
 import pandas as pd
+import logging
 import urllib.parse
 from pathlib import Path
+from core.db import get_db_connection
 from datetime import datetime
 
 def migrate_links():
@@ -78,7 +79,7 @@ def migrate_links():
         return False
 
     # The Atomic Migration Strategy
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(db_path) as conn:
         try:
             conn.execute("BEGIN TRANSACTION")
             

@@ -4,8 +4,6 @@ Splector HTTP Routes
 Serves the dashboard, database viewer, and REST API endpoints.
 """
 
-import sqlite3
-
 from flask import (
     Blueprint,
     jsonify,
@@ -14,6 +12,7 @@ from flask import (
 )
 
 from core.config import load_config, save_config
+from core.db import get_db_connection
 
 main_bp = Blueprint("main", __name__)
 
@@ -61,10 +60,11 @@ def api_stats():
         "urls_discovered": 0,
         "urls_filtered": 0,
         "final_docs": 0,
+        "docs_extracted": 0,
     }
 
     try:
-        conn = sqlite3.connect(config.abs_db_path)
+        conn = get_db_connection(config.abs_db_path)
 
         # Check which tables exist
         tables = {
@@ -97,6 +97,13 @@ def api_stats():
             ).fetchone()
             if row:
                 stats["domains_loaded"] = row[0] or 0
+
+        # Phase 2: Documents successfully extracted
+        if "document_refs" in tables:
+            stats["docs_extracted"] = conn.execute(
+                "SELECT COUNT(*) FROM document_refs "
+                "WHERE processing_status = 'SUCCESS'"
+            ).fetchone()[0]
 
         conn.close()
     except Exception:
@@ -163,7 +170,7 @@ def api_data():
     cols = ", ".join(schema["columns"])
 
     try:
-        conn = sqlite3.connect(config.abs_db_path)
+        conn = get_db_connection(config.abs_db_path)
 
         # Total records
         total = conn.execute(
