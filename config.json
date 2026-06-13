@@ -2,7 +2,7 @@
   "cf_worker_proxy_url": "https://splector-proxy.debojitdasbity.workers.dev/?target=",
   "input_excel": "data/links.xlsx",
   "input_sheet": "production",
-  "concurrency_limit": 300,
+  "concurrency_limit": 100,
   "timeout_seconds": 15,
   "db_path": "data/crawler.db",
   "continue_on_stage_error": true,
@@ -19,5 +19,8 @@
   "phase2_ocr_languages": "eng+hin",
   "phase2_min_char_threshold": 10,
   "phase2_text_char_threshold": 50,
-  "phase2_pdf_page_limit": 3
+  "phase2_pdf_page_limit": 3,
+  "phase2_ocr_max_workers": 8,
+  "phase2_download_concurrency": 20,
+  "enable_file_downloads": false
 }

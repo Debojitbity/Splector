@@ -69,6 +69,42 @@ def compute_sha256(file_path: str) -> str:
 # PDF TEXT EXTRACTION (CPU-BOUND — runs in ProcessPoolExecutor)
 # =========================================================
 
+def _requires_ocr(doc) -> bool:
+    """
+    Analyzes up to the first 3 pages of a PDF. 
+    If it finds more than 150 characters of actual text, it is a digital PDF.
+    Otherwise, it is assumed to be a scanned image.
+    """
+    text_length = 0
+    pages_to_check = min(3, len(doc))
+
+    for page_num in range(pages_to_check):
+        page = doc[page_num]
+        text = page.get_text("text").strip()
+        text_length += len(text)
+
+        if text_length > 150:
+            return False # Fast-exit: It's a text PDF
+
+    return True # Checked 3 pages, barely any text found. Send to OCR.
+
+def _extract_direct_text(file_path: str, page_limit: int) -> str:
+    """Extract text directly using PyMuPDF, bypassing OCR."""
+    import fitz
+    source_doc = fitz.open(file_path)
+    pages_to_keep = min(page_limit, len(source_doc))
+    
+    raw_text = ""
+    for page_num in range(pages_to_keep):
+        page = source_doc[page_num]
+        raw_text += page.get_text("text")
+        
+    source_doc.close()
+    
+    clean = re.sub(r"<[^>]+>", "", raw_text)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
 def extract_pdf_text(
     file_path: str,
     tesseract_cmd: str,
@@ -219,6 +255,8 @@ async def process_pdf(
     session: aiohttp.ClientSession,
     config: PipelineConfig,
     executor,
+    emitter,
+    record_id: str,
 ) -> dict:
     """
     Complete PDF processing pipeline for a single URL.
@@ -230,7 +268,7 @@ async def process_pdf(
     import asyncio
 
     record = {
-        "record_id": generate_id(),
+        "record_id": record_id,
         "source_url": url,
         "doc_type": "PDF",
         "prepared_file_path": None,
@@ -248,16 +286,30 @@ async def process_pdf(
     loop = asyncio.get_running_loop()
 
     try:
-        # --- 2. EXTRACT TEXT (CPU-bound → ProcessPoolExecutor) ---
-        clean_text = await loop.run_in_executor(
-            executor,
-            extract_pdf_text,
-            file_path,
-            config.tesseract_cmd_path,
-            config.phase2_ocr_languages,
-            config.phase2_text_char_threshold,
-            config.phase2_pdf_page_limit,
-        )
+        import fitz
+        
+        # --- 1.5. ROUTING: Check if OCR is required ---
+        doc = fitz.open(file_path)
+        needs_ocr = _requires_ocr(doc)
+        doc.close()
+
+        if needs_ocr:
+            emitter.log("INFO", f"[PDF - OCR] Sent to Tesseract: {url}")
+            # --- 2a. EXTRACT TEXT (CPU-bound → ProcessPoolExecutor) ---
+            clean_text = await loop.run_in_executor(
+                executor,
+                extract_pdf_text,
+                file_path,
+                config.tesseract_cmd_path,
+                config.phase2_ocr_languages,
+                config.phase2_text_char_threshold,
+                config.phase2_pdf_page_limit,
+            )
+        else:
+            emitter.log("INFO", f"[PDF - DIRECT] Parsed {url}")
+            # --- 2b. EXTRACT TEXT (DIRECT - PyMuPDF bypasses ProcessPoolExecutor) ---
+            clean_text = _extract_direct_text(file_path, config.phase2_pdf_page_limit)
+            
     except Exception as e:
         logger.error(f"PDF extraction/OCR failed [{type(e).__name__}]: {url} — {e}")
         record["processing_status"] = "ERROR_OCR"
@@ -299,7 +351,7 @@ async def process_pdf(
 
     # --- 4. SAVE CLEAN TEXT to PREPARED_DATA ---
     os.makedirs(config.abs_phase2_prepared_data, exist_ok=True)
-    text_filename = _safe_filename_from_url(url) + ".txt"
+    text_filename = f"{record_id}.txt"
     text_path = os.path.join(config.abs_phase2_prepared_data, text_filename)
 
     with open(text_path, "w", encoding="utf-8") as f:

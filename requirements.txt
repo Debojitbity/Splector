@@ -17,4 +17,7 @@ pytesseract>=0.3
 
 # Database Sync
 libsql-client>=0.0.8
-python-dotenv>=1.1.0
+
+# Phase 3: Telemetry & Processing
+langdetect>=1.0.9
+tiktoken>=0.13.0

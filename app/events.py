@@ -110,6 +110,7 @@ def _run_pipeline_in_thread(config, emitter, stages=None):
         pipeline_state["cancel_event"] = None
         pipeline_state["thread"] = None
         pipeline_state["status"] = "idle"
+        emitter.pipeline_idle()
         logger.info("Pipeline thread exited.")
 
 
@@ -141,6 +142,7 @@ def _run_domain_checker_in_thread(config, emitter):
         pipeline_state["cancel_event"] = None
         pipeline_state["thread"] = None
         pipeline_state["status"] = "idle"
+        emitter.pipeline_idle()
         logger.info("Domain checker thread exited.")
 
 def _run_domain_grader_in_thread(config, emitter):
@@ -159,6 +161,7 @@ def _run_domain_grader_in_thread(config, emitter):
     finally:
         pipeline_state["thread"] = None
         pipeline_state["status"] = "idle"
+        emitter.pipeline_idle()
         logger.info("Domain grader thread exited.")
 
 
@@ -215,6 +218,8 @@ def _run_document_processor_in_thread(config, emitter):
         pipeline_state["pause_event"] = None
         pipeline_state["cancel_event"] = None
         pipeline_state["thread"] = None
+        pipeline_state["status"] = "idle"
+        emitter.pipeline_idle()
         logger.info("Document processor thread exited.")
 
 # =========================================================

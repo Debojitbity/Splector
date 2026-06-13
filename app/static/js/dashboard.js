@@ -48,6 +48,32 @@ socket.on('pipeline_status', (data) => {
     updateButtonStates(data.status);
 });
 
+// --- Pipeline idle reset ---
+socket.on('pipeline_idle', (data) => {
+    if (data.type === 'pipeline_idle') {
+        // 1. Reset UI Badges
+        const statusPill = document.getElementById('status-pill');
+        const statusText = document.getElementById('status-text');
+        if (statusPill && statusText) {
+            statusPill.className = 'status-pill status-idle';
+            statusText.textContent = 'Idle';
+        }
+
+        // 2. Reset Buttons
+        const btnStart = document.getElementById('btn-start');
+        const btnPause = document.getElementById('btn-pause');
+        const btnStop = document.getElementById('btn-stop');
+        if (btnStart) btnStart.disabled = false;
+        if (btnPause) btnPause.disabled = true;
+        if (btnStop) btnStop.disabled = true;
+
+        // 3. Reset internal JS state trackers
+        currentStatus = 'idle';
+        window.isPipelineRunning = false;
+        window.isPipelinePaused = false;
+    }
+});
+
 // --- Stage start ---
 socket.on('stage_start', (data) => {
     const { stage, total } = data;
@@ -97,6 +123,49 @@ socket.on('stats', (data) => {
     // Phase 2: Document Processing stats
     if (data.docs_processed !== undefined) updateStat('stat-extracted', data.docs_processed || 0);
     if (data.docs_extracted !== undefined) updateStat('stat-extracted', data.docs_extracted || 0);
+
+    // Telemetry Stats
+    if (data.daemon_status !== undefined) {
+        const el = document.getElementById('telemetry-status');
+        if (el) el.textContent = data.daemon_status;
+    }
+    if (data.telemetry_backlog !== undefined) updateStat('telemetry-backlog', parseInt(data.telemetry_backlog) || 0);
+    if (data.total_word_count !== undefined) updateStat('telemetry-words', parseInt(data.total_word_count) || 0);
+    if (data.max_token_count !== undefined) updateStat('telemetry-tokens', parseInt(data.max_token_count) || 0);
+    
+    // Detailed Corpus Metrics
+    if (data.total_files_processed !== undefined) {
+        const el = document.getElementById('stat-total-files');
+        if (el) el.textContent = parseInt(data.total_files_processed).toLocaleString() || "0";
+    }
+    
+    if (data.min_file_size !== undefined && data.max_file_size !== undefined) {
+        const el = document.getElementById('stat-file-size');
+        if (el) el.textContent = `${formatBytes(parseInt(data.min_file_size) || 0)} - ${formatBytes(parseInt(data.max_file_size) || 0)}`;
+    }
+    
+    if (data.min_word_count !== undefined && data.max_word_count !== undefined) {
+        const el = document.getElementById('stat-word-count');
+        if (el) el.textContent = `${(parseInt(data.min_word_count) || 0).toLocaleString()} - ${(parseInt(data.max_word_count) || 0).toLocaleString()}`;
+    }
+    
+    if (data.min_token_count !== undefined && data.max_token_count !== undefined) {
+        const el = document.getElementById('stat-token-count');
+        if (el) el.textContent = `${(parseInt(data.min_token_count) || 0).toLocaleString()} - ${(parseInt(data.max_token_count) || 0).toLocaleString()}`;
+    }
+    
+    if (data.count_english !== undefined) {
+        const el = document.getElementById('stat-lang-en');
+        if (el) el.textContent = parseInt(data.count_english).toLocaleString() || "0";
+    }
+    if (data.count_hindi !== undefined) {
+        const el = document.getElementById('stat-lang-hi');
+        if (el) el.textContent = parseInt(data.count_hindi).toLocaleString() || "0";
+    }
+    if (data.count_others !== undefined) {
+        const el = document.getElementById('stat-lang-others');
+        if (el) el.textContent = parseInt(data.count_others).toLocaleString() || "0";
+    }
 });
 
 
@@ -155,6 +224,15 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
 
@@ -374,12 +452,20 @@ async function loadConfig() {
         document.getElementById('cfg-concurrency').value = cfg.concurrency_limit || 80;
         document.getElementById('cfg-timeout').value = cfg.timeout_seconds || 15;
         document.getElementById('cfg-sheet').value = cfg.input_sheet || 'production';
+        document.getElementById('cfg-ocr-workers').value = cfg.phase2_ocr_max_workers || 8;
+        document.getElementById('cfg-download-concurrency').value = cfg.phase2_download_concurrency || 20;
 
         const toggle = document.getElementById('cfg-continue');
         const label = document.getElementById('cfg-continue-label');
         const active = cfg.continue_on_stage_error !== false;
         toggle.setAttribute('data-active', active);
         label.textContent = active ? 'Enabled' : 'Disabled';
+
+        const toggleDl = document.getElementById('cfg-downloads');
+        const labelDl = document.getElementById('cfg-downloads-label');
+        const activeDl = cfg.enable_file_downloads !== false;
+        toggleDl.setAttribute('data-active', activeDl);
+        labelDl.textContent = activeDl ? 'Enabled' : 'Disabled';
     } catch (e) {
         appendTerminalLine('ERROR', `Failed to load config: ${e.message}`, '');
     }
@@ -393,13 +479,24 @@ function toggleContinueOnError() {
     label.textContent = !current ? 'Enabled' : 'Disabled';
 }
 
+function toggleDownloads() {
+    const toggle = document.getElementById('cfg-downloads');
+    const label = document.getElementById('cfg-downloads-label');
+    const current = toggle.getAttribute('data-active') === 'true';
+    toggle.setAttribute('data-active', !current);
+    label.textContent = !current ? 'Enabled' : 'Disabled';
+}
+
 async function saveConfig() {
     const payload = {
         cf_worker_proxy_url: document.getElementById('cfg-proxy').value,
         concurrency_limit: parseInt(document.getElementById('cfg-concurrency').value) || 80,
         timeout_seconds: parseInt(document.getElementById('cfg-timeout').value) || 15,
         input_sheet: document.getElementById('cfg-sheet').value || 'production',
+        phase2_ocr_max_workers: parseInt(document.getElementById('cfg-ocr-workers').value) || 8,
+        phase2_download_concurrency: parseInt(document.getElementById('cfg-download-concurrency').value) || 20,
         continue_on_stage_error: document.getElementById('cfg-continue').getAttribute('data-active') === 'true',
+        enable_file_downloads: document.getElementById('cfg-downloads').getAttribute('data-active') === 'true',
     };
 
     try {
@@ -432,6 +529,48 @@ async function pollStats() {
         updateStat('stat-urls', data.urls_filtered || 0);
         updateStat('stat-docs', data.final_docs || 0);
         updateStat('stat-extracted', data.docs_extracted || 0);
+
+        if (data.daemon_status !== undefined) {
+            const el = document.getElementById('telemetry-status');
+            if (el) el.textContent = data.daemon_status;
+        }
+        if (data.telemetry_backlog !== undefined) updateStat('telemetry-backlog', parseInt(data.telemetry_backlog) || 0);
+        if (data.total_word_count !== undefined) updateStat('telemetry-words', parseInt(data.total_word_count) || 0);
+        if (data.max_token_count !== undefined) updateStat('telemetry-tokens', parseInt(data.max_token_count) || 0);
+
+        if (data.total_files_processed !== undefined) {
+            const el = document.getElementById('stat-total-files');
+            if (el) el.textContent = parseInt(data.total_files_processed).toLocaleString() || "0";
+        }
+        
+        if (data.min_file_size !== undefined && data.max_file_size !== undefined) {
+            const el = document.getElementById('stat-file-size');
+            if (el) el.textContent = `${formatBytes(parseInt(data.min_file_size) || 0)} - ${formatBytes(parseInt(data.max_file_size) || 0)}`;
+        }
+        
+        if (data.min_word_count !== undefined && data.max_word_count !== undefined) {
+            const el = document.getElementById('stat-word-count');
+            if (el) el.textContent = `${(parseInt(data.min_word_count) || 0).toLocaleString()} - ${(parseInt(data.max_word_count) || 0).toLocaleString()}`;
+        }
+        
+        if (data.min_token_count !== undefined && data.max_token_count !== undefined) {
+            const el = document.getElementById('stat-token-count');
+            if (el) el.textContent = `${(parseInt(data.min_token_count) || 0).toLocaleString()} - ${(parseInt(data.max_token_count) || 0).toLocaleString()}`;
+        }
+        
+        if (data.count_english !== undefined) {
+            const el = document.getElementById('stat-lang-en');
+            if (el) el.textContent = parseInt(data.count_english).toLocaleString() || "0";
+        }
+        if (data.count_hindi !== undefined) {
+            const el = document.getElementById('stat-lang-hi');
+            if (el) el.textContent = parseInt(data.count_hindi).toLocaleString() || "0";
+        }
+        if (data.count_others !== undefined) {
+            const el = document.getElementById('stat-lang-others');
+            if (el) el.textContent = parseInt(data.count_others).toLocaleString() || "0";
+        }
+
     } catch (e) {
         // Silently fail — WebSocket will handle it
     }

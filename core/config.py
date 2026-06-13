@@ -40,6 +40,9 @@ SAVEABLE_FIELDS = [
     "phase2_min_char_threshold",
     "phase2_text_char_threshold",
     "phase2_pdf_page_limit",
+    "phase2_ocr_max_workers",
+    "phase2_download_concurrency",
+    "enable_file_downloads",
 ]
 
 
@@ -70,6 +73,9 @@ class PipelineConfig:
     phase2_min_char_threshold: int = 10
     phase2_text_char_threshold: int = 50
     phase2_pdf_page_limit: int = 3
+    phase2_ocr_max_workers: int = 8
+    phase2_download_concurrency: int = 20
+    enable_file_downloads: bool = True
 
     # --- Computed at runtime (not saved to config.json) ---
     http_headers: dict = field(default_factory=dict, repr=False)

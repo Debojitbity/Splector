@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Curation Inbox{% endblock %}
+
+{% block content %}
+<!-- Secondary Fixed Navbar -->
+<div class="fixed top-16 left-0 right-0 z-40 bg-[#060918]/95 backdrop-blur-md border-b border-slate-800">
+    <div class="max-w-[1600px] mx-auto px-6 h-12 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+            <h1 class="text-sm font-bold text-white tracking-tight">New Posts</h1>
+            <span class="text-xs text-slate-400 border-l border-slate-700 pl-4">Pending - <span class="text-indigo-400 font-semibold" id="total-count">...</span></span>
+        </div>
+        
+        <!-- Pagination Controls (Scaled down) -->
+        <div class="flex items-center gap-2">
+            <button id="btn-prev" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
+            <div class="flex items-center gap-2 px-1">
+                <span class="text-xs text-slate-500">Page</span>
+                <input type="number" id="page-input" class="w-12 bg-slate-900 border border-slate-700 rounded-md px-1.5 py-1 text-xs text-white text-center focus:outline-none focus:border-indigo-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" value="1" min="1">
+                <button id="btn-go" class="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md transition-colors">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                </button>
+            </div>
+            <button id="btn-next" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+        </div>
+    </div>
+</div>
+
+<!-- Grid Container -->
+<div id="curation-grid" class="pt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <!-- Cards will be injected here dynamically by curation.js -->
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/curation.js') }}"></script>
+{% endblock %}

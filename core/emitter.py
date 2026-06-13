@@ -40,6 +40,10 @@ class ProgressEmitter:
         """Status: 'running', 'paused', 'completed', 'cancelled', 'error'."""
         self._emit("pipeline_status", {"status": status})
 
+    def pipeline_idle(self):
+        """Broadcasts that the pipeline orchestrator has finished and is now idle."""
+        self._emit("pipeline_idle", {"type": "pipeline_idle"})
+
     # -------------------------------------------------
     # Stage progress
     # -------------------------------------------------

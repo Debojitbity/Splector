@@ -252,10 +252,21 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                 prepared_file_path TEXT,
                 archive_file_path  TEXT,
                 processing_status  TEXT NOT NULL,
+                workflow_state     TEXT DEFAULT 'UNREVIEWED',
                 timestamp          TEXT DEFAULT (datetime('now')),
                 UNIQUE(source_url)
             )
         """)
+        
+        # State tracking for auto sync
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('last_turso_sync', '1970-01-01 00:00:00')")
+        
         conn.commit()
 
         pending = 0

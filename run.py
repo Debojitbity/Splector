@@ -47,6 +47,50 @@ from app import create_app, socketio
 app = create_app()
 
 if __name__ == "__main__":
+    from core.config import load_config
+    from core.emitter import ProgressEmitter
+    from core.auto_sync import start_auto_sync
+    from core.stats_worker import run_telemetry_loop
+    import asyncio
+    import threading
+
+    config = load_config()
+    emitter = ProgressEmitter(socketio=socketio)
+
+    def _proactor_exception_handler(loop, context):
+        exception = context.get("exception")
+        if isinstance(exception, (ConnectionResetError, ConnectionAbortedError)):
+            return
+        if isinstance(exception, OSError):
+            if getattr(exception, "winerror", None) in (10054, 10038):
+                return
+        loop.default_exception_handler(context)
+
+    def run_auto_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.set_exception_handler(_proactor_exception_handler)
+        try:
+            loop.run_until_complete(start_auto_sync(config.abs_db_path, emitter))
+        except Exception as e:
+            logging.error(f"Auto-sync thread crashed: {e}")
+        finally:
+            loop.close()
+
+    def run_telemetry():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.set_exception_handler(_proactor_exception_handler)
+        try:
+            loop.run_until_complete(run_telemetry_loop(config.abs_db_path, emitter))
+        except Exception as e:
+            logging.error(f"Telemetry thread crashed: {e}")
+        finally:
+            loop.close()
+
+    threading.Thread(target=run_auto_sync, daemon=True, name="AutoSyncThread").start()
+    threading.Thread(target=run_telemetry, daemon=True, name="TelemetryThread").start()
+
     print("\n" + "=" * 56)
     print("  SPLECTOR DASHBOARD")
     print("  http://localhost:5000")

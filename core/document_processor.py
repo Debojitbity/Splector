@@ -37,9 +37,6 @@ from core.db import get_db_connection
 
 logger = logging.getLogger("splector.document_processor")
 
-# Maximum CPU workers for OCR. Leaves headroom for OS stability.
-MAX_OCR_WORKERS = 8
-
 
 # =========================================================
 # URL PRE-PROCESSING (Input Normalization)
@@ -72,7 +69,7 @@ def _normalize_urls(db_path: str) -> list[str]:
     cursor = conn.execute(
         "SELECT DISTINCT final_target_url FROM stage4_final_docs "
         "WHERE final_target_url NOT IN ("
-        "SELECT source_url FROM document_refs WHERE processing_status = 'SUCCESS')"
+        "SELECT source_url FROM document_refs WHERE processing_status IN ('SUCCESS', 'SEED_METADATA_ONLY', 'REJECTED_UNSUPPORTED'))"
     )
     raw_urls = [row[0] for row in cursor.fetchall() if row[0]]
     conn.close()
@@ -97,14 +94,19 @@ def _normalize_urls(db_path: str) -> list[str]:
 
 def _classify_url(url: str) -> str:
     """
-    Classify a URL as 'PDF' or 'HTML' based on its path extension.
-    Default is 'HTML' for ambiguous URLs.
+    Classify a URL as 'PDF', 'UNSUPPORTED', or 'HTML' based on its path extension.
     """
     parsed = urlparse(url)
     path_lower = parsed.path.lower()
+    
+    bad_exts = ('.zip', '.exe', '.rar', '.tar', '.gz', '.7z', 
+                '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                '.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mp3')
 
     if path_lower.endswith(".pdf"):
         return "PDF"
+    elif path_lower.endswith(bad_exts):
+        return "UNSUPPORTED"
     else:
         return "HTML"
 
@@ -118,6 +120,7 @@ async def _process_single_document(
     url: str,
     config: PipelineConfig,
     executor: ProcessPoolExecutor,
+    emitter: ProgressEmitter,
 ) -> dict:
     """
     Process a single document URL. Routes to PDF or HTML engine
@@ -127,11 +130,48 @@ async def _process_single_document(
         Audit record dict for document_refs table.
     """
     doc_type = _classify_url(url)
+    
+    from core.snowflake import generate_id
+    record_id = generate_id()
+
+    if doc_type == "UNSUPPORTED":
+        from datetime import datetime, timezone
+        return {
+            "record_id": record_id,
+            "source_url": url,
+            "doc_type": "UNSUPPORTED",
+            "prepared_file_path": None,
+            "archive_file_path": None,
+            "processing_status": "REJECTED_UNSUPPORTED",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+    if not config.enable_file_downloads:
+        # Instantly bypass network I/O and CPU to seed the database
+        from datetime import datetime, timezone
+
+        return {
+            "record_id": record_id,
+            "source_url": url,
+            "doc_type": doc_type,
+            "prepared_file_path": None,
+            "archive_file_path": None,
+            "processing_status": "SEED_METADATA_ONLY",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
 
     if doc_type == "PDF":
-        return await process_pdf(url, session, config, executor)
+        return await process_pdf(url, session, config, executor, emitter, record_id)
     else:
-        return await process_html(url, session, config)
+        record = await process_html(url, session, config, emitter, record_id)
+
+        # Catch disguised PDFs discovered during the HTTP handshake
+        if record.get("processing_status") == "RETRY_AS_PDF":
+            # Log the dynamic reroute for visibility
+            emitter.log("INFO", f"[DYNAMIC REROUTE] Disguised PDF detected: {url}")
+            return await process_pdf(url, session, config, executor, emitter, record_id)
+
+        return record
 
 
 # =========================================================
@@ -204,7 +244,7 @@ async def run_document_processing(
     blacklisted_for_this_run = set()
 
     # --- Create shared ProcessPoolExecutor for CPU-bound OCR ---
-    executor = ProcessPoolExecutor(max_workers=MAX_OCR_WORKERS)
+    executor = ProcessPoolExecutor(max_workers=config.phase2_ocr_max_workers)
 
     # --- Stats counters ---
     completed = 0
@@ -214,7 +254,7 @@ async def run_document_processing(
 
     # --- aiohttp session ---
     connector = aiohttp.TCPConnector(
-        limit=config.concurrency_limit,
+        limit=config.phase2_download_concurrency,
         ssl=False,
         ttl_dns_cache=300,
     )
@@ -226,7 +266,7 @@ async def run_document_processing(
         work_queue.put_nowait(url)
 
     counter_lock = asyncio.Lock()
-    semaphore = asyncio.Semaphore(config.concurrency_limit)
+    semaphore = asyncio.Semaphore(config.phase2_download_concurrency)
 
     async def worker(session: aiohttp.ClientSession):
         nonlocal completed, success_count, rejected_count, error_count
@@ -255,7 +295,7 @@ async def run_document_processing(
             try:
                 async with semaphore:
                     record = await _process_single_document(
-                        session, url, config, executor
+                        session, url, config, executor, emitter
                     )
 
                     status = record["processing_status"]
@@ -309,7 +349,7 @@ async def run_document_processing(
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector,
     ) as session:
-        num_workers = min(config.concurrency_limit, total)
+        num_workers = min(config.phase2_download_concurrency, total)
         workers = [
             asyncio.create_task(worker(session))
             for _ in range(num_workers)

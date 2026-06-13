@@ -132,6 +132,10 @@ async def download_html(
                 logger.warning(f"HTML download HTTP {response.status}: {url}")
                 return None
 
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'application/pdf' in content_type:
+                return "RETRY_AS_PDF"
+
             # Read as text, then write as UTF-8
             html_text = await response.text(errors="ignore")
 
@@ -153,6 +157,8 @@ async def process_html(
     url: str,
     session: aiohttp.ClientSession,
     config: PipelineConfig,
+    emitter,
+    record_id: str,
 ) -> dict:
     """
     Complete HTML processing pipeline for a single URL.
@@ -162,7 +168,7 @@ async def process_html(
          archive_file_path, processing_status, timestamp}
     """
     record = {
-        "record_id": generate_id(),
+        "record_id": record_id,
         "source_url": url,
         "doc_type": "HTML",
         "prepared_file_path": None,
@@ -173,6 +179,10 @@ async def process_html(
 
     # --- 1. DOWNLOAD ---
     file_path = await download_html(session, url, config)
+    
+    if file_path == "RETRY_AS_PDF":
+        return {"processing_status": "RETRY_AS_PDF"}
+        
     if not file_path:
         record["processing_status"] = "ERROR_DOWNLOAD"
         return record
@@ -182,6 +192,7 @@ async def process_html(
         # HTML parsing is lightweight enough to run in the event loop.
         # No ProcessPoolExecutor needed here.
         clean_text = extract_html_text(file_path)
+        emitter.log("INFO", f"[HTML - DIRECT] Parsed {url}")
     except Exception as e:
         logger.error(f"HTML extraction failed [{type(e).__name__}]: {url} — {e}")
         record["processing_status"] = "ERROR_DOWNLOAD"
@@ -211,7 +222,7 @@ async def process_html(
 
     # --- 4. SAVE CLEAN TEXT to PREPARED_DATA ---
     os.makedirs(config.abs_phase2_prepared_data, exist_ok=True)
-    text_filename = _safe_filename_from_url(url) + ".txt"
+    text_filename = f"{record_id}.txt"
     text_path = os.path.join(config.abs_phase2_prepared_data, text_filename)
 
     with open(text_path, "w", encoding="utf-8") as f:

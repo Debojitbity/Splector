@@ -9,6 +9,8 @@ from flask import (
     jsonify,
     render_template,
     request,
+    send_file,
+    abort,
 )
 
 from core.config import load_config, save_config
@@ -29,6 +31,11 @@ def dashboard():
 @main_bp.route("/database")
 def database():
     return render_template("database.html")
+
+
+@main_bp.route("/curation")
+def curation():
+    return render_template("curation.html")
 
 
 # =========================================================
@@ -104,6 +111,12 @@ def api_stats():
                 "SELECT COUNT(*) FROM document_refs "
                 "WHERE processing_status = 'SUCCESS'"
             ).fetchone()[0]
+
+        # System Stats (Telemetry)
+        if "system_stats" in tables:
+            rows = conn.execute("SELECT metric_key, metric_value FROM system_stats").fetchall()
+            for k, v in rows:
+                stats[k] = v
 
         conn.close()
     except Exception:
@@ -221,3 +234,102 @@ def api_data():
             "data": [],
             "error": str(e),
         })
+
+# =========================================================
+# API: CURATION
+# =========================================================
+
+@main_bp.route("/api/curation/documents", methods=["GET"])
+def api_curation_documents():
+    config = load_config()
+    page = request.args.get('page', 1, type=int)
+    limit = 100
+    offset = (page - 1) * limit
+    
+    try:
+        conn = get_db_connection(config.abs_db_path)
+        
+        # Get total unreviewed
+        total_unreviewed = conn.execute(
+            "SELECT COUNT(*) FROM document_refs WHERE workflow_state = 'UNREVIEWED'"
+        ).fetchone()[0]
+        
+        # We need a left join because stage4_final_docs might not have a 1-1 match if it was seeded
+        # Group by record_id to ensure exactly 100 unique cards
+        query = """
+            SELECT d.record_id, s.anchor_text, d.source_url, d.prepared_file_path, d.timestamp
+            FROM document_refs d
+            LEFT JOIN stage4_final_docs s ON d.source_url = s.final_target_url
+            WHERE d.workflow_state = 'UNREVIEWED'
+            GROUP BY d.record_id
+            ORDER BY d.timestamp DESC
+            LIMIT ? OFFSET ?
+        """
+        rows = conn.execute(query, (limit, offset)).fetchall()
+        conn.close()
+        
+        docs = []
+        for row in rows:
+            docs.append({
+                "record_id": row[0],
+                "anchor_text": row[1] or "Unknown Source",
+                "source_url": row[2],
+                "prepared_file_path": row[3],
+                "timestamp": row[4]
+            })
+            
+        return jsonify({
+            "total_unreviewed": total_unreviewed,
+            "page": page,
+            "limit": limit,
+            "docs": docs
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@main_bp.route("/api/curation/action/<record_id>", methods=["POST"])
+def api_curation_action(record_id):
+    config = load_config()
+    data = request.get_json(force=True)
+    action = data.get("action")
+    
+    if action not in ['OBSOLETE', 'NOT_JOB_RELATED', 'DRAFT']:
+        return jsonify({"error": "Invalid action"}), 400
+        
+    try:
+        conn = get_db_connection(config.abs_db_path)
+        conn.execute(
+            "UPDATE document_refs SET workflow_state = ? WHERE record_id = ?",
+            (action, record_id)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@main_bp.route("/api/local_file/<record_id>", methods=["GET"])
+def api_local_file(record_id):
+    config = load_config()
+    try:
+        conn = get_db_connection(config.abs_db_path)
+        row = conn.execute(
+            "SELECT prepared_file_path FROM document_refs WHERE record_id = ?",
+            (record_id,)
+        ).fetchone()
+        conn.close()
+        
+        if row and row[0]:
+            file_path = row[0]
+            import os
+            # Use absolute path resolving relative to base_dir if it's relative
+            if not os.path.isabs(file_path):
+                file_path = os.path.join(config.base_dir, file_path)
+            if os.path.exists(file_path):
+                return send_file(file_path, mimetype='text/plain')
+                
+        return jsonify({"error": "File not found on disk: " + str(row[0] if row else 'No row')}), 404
+    except Exception as e:
+        import traceback
+        return jsonify({"error": traceback.format_exc()}), 500
+
