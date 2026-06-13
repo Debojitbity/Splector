@@ -4,3 +4,4 @@ splector_debug.log
 *.sqlite
 .env
 data/crawler.db
+__pycache__/

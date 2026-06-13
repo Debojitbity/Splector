@@ -6,6 +6,7 @@ Uses libsql_client to push and pull data from the cloud.
 import os
 import sqlite3
 import logging
+import re
 
 try:
     import libsql_client
@@ -23,7 +24,14 @@ async def _ensure_tables(client, local_db_path: str):
     """Ensure cloud DB has the required tables by mirroring the local schema."""
     conn = sqlite3.connect(str(local_db_path))
     cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('domains', 'document_refs')")
-    statements = [row[0] for row in cursor.fetchall() if row[0]]
+    
+    statements = []
+    for row in cursor.fetchall():
+        if row[0]:
+            original_sql = row[0]
+            safe_sql = re.sub(r'(?i)CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)', 'CREATE TABLE IF NOT EXISTS ', original_sql)
+            statements.append(safe_sql)
+            
     conn.close()
     
     if statements:
