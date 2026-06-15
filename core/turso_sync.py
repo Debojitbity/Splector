@@ -37,6 +37,20 @@ async def _ensure_tables(client, local_db_path: str):
     if statements:
         await client.batch(statements)
 
+    # Sync newer columns that may have been added locally via ALTER TABLE
+    columns = [
+        ('word_count', 'INTEGER'),
+        ('token_count', 'INTEGER'),
+        ('language', 'TEXT'),
+        ('file_size_bytes', 'INTEGER'),
+        ('workflow_state', "TEXT DEFAULT 'UNREVIEWED'")
+    ]
+    for col_name, col_type in columns:
+        try:
+            await client.execute(f"ALTER TABLE document_refs ADD COLUMN {col_name} {col_type}")
+        except Exception:
+            pass
+
 def _generate_insert_query(table_name: str, keys: list) -> str:
     cols = ", ".join(keys)
     placeholders = ", ".join(["?"] * len(keys))

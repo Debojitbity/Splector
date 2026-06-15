@@ -12,9 +12,11 @@ from flask import (
     send_file,
     abort,
 )
+import asyncio
 
 from core.config import load_config, save_config
 from core.db import get_db_connection
+from core.stats_worker import sync_filesystem
 
 main_bp = Blueprint("main", __name__)
 
@@ -123,6 +125,16 @@ def api_stats():
         pass  # DB might not exist yet
 
     return jsonify(stats)
+
+
+@main_bp.route("/api/telemetry/sync", methods=["POST"])
+def api_telemetry_sync():
+    config = load_config()
+    try:
+        asyncio.run(sync_filesystem(config.abs_db_path, config.base_dir))
+        return jsonify({"status": "success", "message": "File system synchronized and stats updated."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # =========================================================

@@ -1,12 +1,3 @@
-"""
-Splector Dashboard — Entry Point
-
-Usage:
-    python run.py
-
-Opens the dashboard at http://localhost:5000
-"""
-
 import logging
 import sys
 import os
@@ -14,14 +5,6 @@ from dotenv import load_dotenv
 
 # Load environment variables (Turso, etc.)
 load_dotenv()
-
-# =========================================================
-# PERSISTENT FILE LOGGING
-# =========================================================
-# logging.basicConfig() is silently ignored when Flask/Werkzeug
-# has already configured the root logger. We must explicitly
-# create and attach handlers BEFORE importing the app.
-# =========================================================
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -57,6 +40,10 @@ if __name__ == "__main__":
     config = load_config()
     emitter = ProgressEmitter(socketio=socketio)
 
+    from core.seeder import auto_seed_database
+    archive_path = os.path.join(config.base_dir, 'data', 'archive', 'links.xlsx')
+    auto_seed_database(config.abs_db_path, archive_path)
+
     def _proactor_exception_handler(loop, context):
         exception = context.get("exception")
         if isinstance(exception, (ConnectionResetError, ConnectionAbortedError)):
@@ -82,7 +69,7 @@ if __name__ == "__main__":
         asyncio.set_event_loop(loop)
         loop.set_exception_handler(_proactor_exception_handler)
         try:
-            loop.run_until_complete(run_telemetry_loop(config.abs_db_path, emitter))
+            loop.run_until_complete(run_telemetry_loop(config.abs_db_path, emitter, config.base_dir))
         except Exception as e:
             logging.error(f"Telemetry thread crashed: {e}")
         finally:
@@ -99,7 +86,7 @@ if __name__ == "__main__":
     socketio.run(
         app,
         host="0.0.0.0",
-        port=5000,
+        port=5001,
         debug=True,
         use_reloader=False,   # Reloader can cause duplicate threads
         allow_unsafe_werkzeug=True,

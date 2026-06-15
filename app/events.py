@@ -23,8 +23,6 @@ from app import socketio
 from core.config import load_config
 from core.emitter import ProgressEmitter
 from core.scraper import run_pipeline, db_writer_loop
-from core.domain_checker import run_domain_checker
-from core.domain_grader import run_domain_grader
 from core.document_processor import run_document_processing
 from core.turso_sync import import_from_turso, export_to_turso
 
@@ -39,6 +37,7 @@ pipeline_state = {
     "loop": None,           # asyncio event loop in the bg thread
     "pause_event": None,    # asyncio.Event — set = running, clear = paused
     "cancel_event": None,   # asyncio.Event — set = cancel requested
+    "config": None,         # PipelineConfig reference (mutable at runtime)
     "status": "idle",       # idle | running | paused | stopping
 }
 
@@ -108,61 +107,13 @@ def _run_pipeline_in_thread(config, emitter, stages=None):
         pipeline_state["loop"] = None
         pipeline_state["pause_event"] = None
         pipeline_state["cancel_event"] = None
+        pipeline_state["config"] = None
         pipeline_state["thread"] = None
         pipeline_state["status"] = "idle"
         emitter.pipeline_idle()
         logger.info("Pipeline thread exited.")
 
 
-def _run_domain_checker_in_thread(config, emitter):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.set_exception_handler(_proactor_exception_handler)
-    pipeline_state["loop"] = loop
-
-    pause_event = asyncio.Event()
-    pause_event.set()
-    cancel_event = asyncio.Event()
-
-    pipeline_state["pause_event"] = pause_event
-    pipeline_state["cancel_event"] = cancel_event
-
-    try:
-        loop.run_until_complete(
-            run_domain_checker(config, emitter, pause_event, cancel_event)
-        )
-    except Exception as e:
-        logger.error(f"Domain checker thread error: {e}")
-        emitter.pipeline_status("error")
-        emitter.log("ERROR", f"Domain checker thread crashed: {e}")
-    finally:
-        loop.close()
-        pipeline_state["loop"] = None
-        pipeline_state["pause_event"] = None
-        pipeline_state["cancel_event"] = None
-        pipeline_state["thread"] = None
-        pipeline_state["status"] = "idle"
-        emitter.pipeline_idle()
-        logger.info("Domain checker thread exited.")
-
-def _run_domain_grader_in_thread(config, emitter):
-    # Runs synchronously, no asyncio loop
-    pipeline_state["loop"] = None
-    pipeline_state["pause_event"] = None
-    pipeline_state["cancel_event"] = None
-
-    try:
-        run_domain_grader(config, emitter)
-        emitter.pipeline_status("completed")
-    except Exception as e:
-        logger.error(f"Domain grader thread error: {e}")
-        emitter.pipeline_status("error")
-        emitter.log("ERROR", f"Domain grader thread crashed: {e}")
-    finally:
-        pipeline_state["thread"] = None
-        pipeline_state["status"] = "idle"
-        emitter.pipeline_idle()
-        logger.info("Domain grader thread exited.")
 
 
 def _run_document_processor_in_thread(config, emitter):
@@ -265,28 +216,25 @@ def handle_start(data=None):
         })
         return
 
-    task = data.get("task", "full_scraper") if data else "full_scraper"
+    task = data.get("task", "run_main_server") if data else "run_main_server"
     logger.info(f"Received pipeline:start event for task: {task}")
     pipeline_state["status"] = "running"
 
     config = load_config()
     emitter = ProgressEmitter(socketio=socketio)
 
-    if task == "domain_checker":
-        target_fn = _run_domain_checker_in_thread
-        args = (config, emitter)
-    elif task == "domain_grader":
-        target_fn = _run_domain_grader_in_thread
-        args = (config, emitter)
-    elif task == "daily_scraper":
+    if task == "run_aux_server":
         target_fn = _run_pipeline_in_thread
         args = (config, emitter, [2, 3, 4])
-    elif task == "document_processor":
+    elif task == "run_download_data":
         target_fn = _run_document_processor_in_thread
         args = (config, emitter)
-    else:
+    else:  # run_main_server
         target_fn = _run_pipeline_in_thread
         args = (config, emitter, [1, 2, 3, 4])
+
+    # Store config reference so proxy_decision handler can mutate allow_local_ip
+    pipeline_state["config"] = config
 
     thread = threading.Thread(
         target=target_fn,
@@ -378,6 +326,54 @@ def handle_stop(data=None):
         socketio.emit("log", {
             "level": "WARNING",
             "message": "Pipeline stop requested. Finishing current tasks...",
+            "timestamp": "",
+        })
+
+
+# =========================================================
+# SOCKETIO EVENT: PROXY DECISION
+# =========================================================
+# Fired by the frontend modal when all CF workers are exhausted.
+# The user picks either 'continue_local' (use raw IP) or 'cancel'.
+# =========================================================
+
+@socketio.on("proxy_decision")
+def handle_proxy_decision(data=None):
+    if not data:
+        return
+
+    action = data.get("action")
+    loop = pipeline_state["loop"]
+    pause_evt = pipeline_state["pause_event"]
+    cancel_evt = pipeline_state["cancel_event"]
+    config = pipeline_state.get("config")
+
+    if action == "continue_local":
+        logger.info("User approved local IP fallback.")
+        if config:
+            config.allow_local_ip = True
+        if loop and pause_evt:
+            loop.call_soon_threadsafe(pause_evt.set)
+        socketio.emit("pipeline_status", {"status": "running"})
+        socketio.emit("log", {
+            "level": "INFO",
+            "message": "Pipeline resuming on local IP...",
+            "timestamp": "",
+        })
+        pipeline_state["status"] = "running"
+
+    elif action == "cancel":
+        logger.info("User cancelled pipeline after proxy exhaustion.")
+        if loop and cancel_evt:
+            loop.call_soon_threadsafe(cancel_evt.set)
+        # Also unblock pause so workers can see the cancel flag and exit
+        if loop and pause_evt:
+            loop.call_soon_threadsafe(pause_evt.set)
+        pipeline_state["status"] = "stopping"
+        socketio.emit("pipeline_status", {"status": "stopping"})
+        socketio.emit("log", {
+            "level": "WARNING",
+            "message": "Pipeline cancelled by user after proxy exhaustion.",
             "timestamp": "",
         })
 

@@ -170,6 +170,72 @@ socket.on('stats', (data) => {
 
 
 // =========================================================
+// PROXY EXHAUSTION HANDLER
+// =========================================================
+
+// Inline Web Audio alert beep (880Hz square wave, 500ms) — no external file dependency
+const ALERT_BEEP_B64 = (() => {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        return { ctx, canBeep: true };
+    } catch (e) {
+        return { ctx: null, canBeep: false };
+    }
+})();
+
+function playAlertBeep() {
+    if (!ALERT_BEEP_B64.canBeep || !ALERT_BEEP_B64.ctx) return;
+    try {
+        const ctx = ALERT_BEEP_B64.ctx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.5);
+    } catch (e) {
+        // Silently fail if audio context is not available
+    }
+}
+
+socket.on('proxy_exhausted', (data) => {
+    appendTerminalLine('ERROR', data.message || 'All Cloudflare Workers exhausted!', '');
+    playAlertBeep();
+
+    // Show the modal
+    const modal = document.getElementById('proxy-exhausted-modal');
+    if (modal) modal.classList.remove('hidden');
+});
+
+// Modal button handlers (wired on DOMContentLoaded below)
+function initProxyModal() {
+    const modal = document.getElementById('proxy-exhausted-modal');
+    const btnContinue = document.getElementById('btn-proxy-continue');
+    const btnCancel = document.getElementById('btn-proxy-cancel');
+
+    if (btnContinue) {
+        btnContinue.addEventListener('click', () => {
+            if (modal) modal.classList.add('hidden');
+            socket.emit('proxy_decision', { action: 'continue_local' });
+            appendTerminalLine('INFO', 'User approved local IP fallback.', '');
+        });
+    }
+
+    if (btnCancel) {
+        btnCancel.addEventListener('click', () => {
+            if (modal) modal.classList.add('hidden');
+            socket.emit('proxy_decision', { action: 'cancel' });
+            appendTerminalLine('WARNING', 'User cancelled pipeline.', '');
+        });
+    }
+}
+
+
+// =========================================================
 // PROGRESS BAR LOGIC
 // =========================================================
 
@@ -389,7 +455,7 @@ function startPipeline() {
     clearTerminal();
     
     const taskSelector = document.getElementById('task-selector');
-    const selectedTask = taskSelector ? taskSelector.value : 'full_scraper';
+    const selectedTask = taskSelector ? taskSelector.value : 'run_main_server';
     socket.emit('pipeline:start', { task: selectedTask });
 }
 
@@ -448,7 +514,9 @@ async function loadConfig() {
         const res = await fetch('/api/config');
         const cfg = await res.json();
 
-        document.getElementById('cfg-proxy').value = cfg.cf_worker_proxy_url || '';
+        // Populate workers textarea (array → newline-separated)
+        const workers = cfg.cf_workers || [];
+        document.getElementById('cfg-proxy').value = workers.join('\n');
         document.getElementById('cfg-concurrency').value = cfg.concurrency_limit || 80;
         document.getElementById('cfg-timeout').value = cfg.timeout_seconds || 15;
         document.getElementById('cfg-sheet').value = cfg.input_sheet || 'production';
@@ -489,7 +557,11 @@ function toggleDownloads() {
 
 async function saveConfig() {
     const payload = {
-        cf_worker_proxy_url: document.getElementById('cfg-proxy').value,
+        // Parse workers textarea (newline-separated → array, filter empties)
+        cf_workers: document.getElementById('cfg-proxy').value
+            .split('\n')
+            .map(s => s.trim())
+            .filter(s => s.length > 0),
         concurrency_limit: parseInt(document.getElementById('cfg-concurrency').value) || 80,
         timeout_seconds: parseInt(document.getElementById('cfg-timeout').value) || 15,
         input_sheet: document.getElementById('cfg-sheet').value || 'production',
@@ -581,3 +653,37 @@ setInterval(pollStats, 5000);
 
 // Initial stats load
 pollStats();
+
+// =========================================================
+// GHOST PURGE (TELEMETRY SYNC)
+// =========================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    // --- Proxy Modal ---
+    initProxyModal();
+
+    // --- Telemetry Sync ---
+    const btnSyncTelemetry = document.getElementById('btn-sync-telemetry');
+    if (btnSyncTelemetry) {
+        btnSyncTelemetry.addEventListener('click', async () => {
+            const icon = btnSyncTelemetry.querySelector('svg');
+            if (icon) icon.classList.add('animate-spin');
+            
+            try {
+                const res = await fetch('/api/telemetry/sync', { method: 'POST' });
+                const result = await res.json();
+                
+                if (result.status === 'success') {
+                    appendTerminalLine('INFO', `Telemetry Sync: ${result.message}`, '');
+                    pollStats();
+                } else {
+                    appendTerminalLine('ERROR', `Telemetry Sync Failed: ${result.message}`, '');
+                }
+            } catch (e) {
+                appendTerminalLine('ERROR', `Telemetry Sync Error: ${e.message}`, '');
+            } finally {
+                if (icon) icon.classList.remove('animate-spin');
+            }
+        });
+    }
+});

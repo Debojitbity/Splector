@@ -1,5 +1,5 @@
 """
-Splector Mega Pipeline 3.0 (SQLite & Worker Pool)
+Splector Mega Pipeline 4.0 (Worker Rotation & SQLite)
 
 Architecture:
   - asyncio.Queue WORKER POOL for concurrent URL processing
@@ -7,11 +7,12 @@ Architecture:
   - ProgressEmitter for real-time WebSocket dashboard updates
   - Pause/Cancel support via asyncio.Events
 
-Features preserved from 2.0:
-  1) Cloudflare Waterfall Routing (Proxy -> Local Fallback)
-  2) 2-Dimensional Lexical Triage (URL + Anchor Text)
-  3) Zero-Loss URL Sanitization (Preserves DOM context)
-  4) Level 3 Child Extraction (Grabs actual PDFs/HTMLs from notice boards)
+Features (v4.0):
+  1) Cloudflare Worker ROTATION (array of proxies, auto-retire on 429/1015)
+  2) Manual Local-IP Fallback (pipeline pauses, user approves via modal)
+  3) 2-Dimensional Lexical Triage (URL + Anchor Text)
+  4) Zero-Loss URL Sanitization (Preserves DOM context)
+  5) Level 3 Child Extraction (Grabs actual PDFs/HTMLs from notice boards)
 """
 
 from __future__ import annotations
@@ -19,6 +20,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SECRET_TOKEN = os.getenv("CF_TOKEN")
 import re
 import urllib.parse
 from datetime import datetime
@@ -73,41 +78,121 @@ ANCHOR_JOB_HINTS = re.compile(
 
 
 # =========================================================
-# CORE WATERFALL NETWORK FETCHER (preserved from 2.0)
+# CORE WATERFALL NETWORK FETCHER (v4.0 — Worker Rotation)
 # =========================================================
+# RATE-LIMIT CODES:
+#   429 = HTTP Too Many Requests
+#  1015 = Cloudflare-specific rate-limit
+# On these codes the worker is PERMANENTLY retired for this
+# session. When ALL workers are retired, the pipeline PAUSES
+# and waits for user approval before touching the local IP.
+# =========================================================
+
+RATE_LIMIT_CODES = {1015}
+PROXY_SKIP_CODES = {403, 502, 503}
+
 
 async def fetch_waterfall(
     session: aiohttp.ClientSession,
     target_url: str,
     config: PipelineConfig,
+    emitter: ProgressEmitter,
+    pause_event: asyncio.Event,
 ) -> str | None:
-    """Attempts Cloudflare Edge Proxy first. Falls back to local IP if blocked."""
+    """
+    Cloudflare Worker Rotation Fetcher.
+
+    1. Iterates through config._active_workers.
+    2. On 429/1015 → retires that worker permanently for this run.
+    3. When all workers exhausted → emits 'proxy_exhausted',
+       clears pause_event, and blocks until the user decides.
+    4. If user approves local IP → single local attempt.
+    5. If user cancels → returns None (cancel_event handles shutdown).
+    """
     html = None
 
-    # ATTEMPT 1: Cloudflare Worker
-    if config.cf_worker_proxy_url:
-        proxy_url = (
-            f"{config.cf_worker_proxy_url}"
-            f"{urllib.parse.quote(target_url, safe=':/')}"
-        )
+    # --- ATTEMPT: Cloudflare Workers (rotate through active list) ---
+    workers_to_try = list(config._active_workers)  # snapshot
+    for worker_url in workers_to_try:
+        proxy_url = f"{worker_url}{urllib.parse.quote(target_url, safe=':/')}"
         try:
+            request_headers = dict(config.http_headers)
+            if SECRET_TOKEN:
+                request_headers["x-proxy-token"] = SECRET_TOKEN
+
             async with session.get(
                 proxy_url,
-                headers=config.http_headers,
+                headers=request_headers,
                 timeout=aiohttp.ClientTimeout(total=config.timeout_seconds),
                 ssl=False,
                 allow_redirects=True,
             ) as response:
-                if (
-                    response.status not in [403, 502, 503, 1000]
-                    and response.status < 400
-                ):
-                    html = await response.text(errors="ignore")
-        except Exception:
-            pass  # Proxy attempt failed, continue to fallback
+                if response.status in RATE_LIMIT_CODES:
+                    # --- Worker hit daily limit: retire it ---
+                    if worker_url in config._active_workers:
+                        config._active_workers.remove(worker_url)
+                        emitter.log(
+                            "WARNING",
+                            f"Worker rate-limited ({response.status}): "
+                            f"{worker_url[:50]}… — retired. "
+                            f"{len(config._active_workers)} workers remaining.",
+                        )
+                    continue  # Try next worker
 
-    # ATTEMPT 2: Local Datacenter IP
-    if not html:
+                if response.status == 429:
+                    # Burst rate limit (Cloudflare or target). Wait and try next proxy.
+                    await asyncio.sleep(1.5)
+                    continue
+
+                if response.status in PROXY_SKIP_CODES or response.status >= 400:
+                    continue  # Skip but don't retire
+
+                # --- Success ---
+                html = await response.text(errors="ignore")
+                if html:
+                    return html
+
+        except Exception:
+            continue  # Network error on this worker, try next
+
+    # --- ALL WORKERS EXHAUSTED CHECK ---
+    if not config._active_workers:
+        # Emit exhaustion signal to frontend
+        emitter.log(
+            "ERROR",
+            "All Cloudflare Workers exhausted. Waiting for user decision...",
+        )
+        emitter._emit("proxy_exhausted", {
+            "message": "All Cloudflare Worker limits have been reached.",
+        })
+
+        # --- PAUSE the pipeline: block until user clicks a button ---
+        pause_event.clear()
+        await pause_event.wait()
+
+        # --- User responded ---
+        if config.allow_local_ip:
+            emitter.log("INFO", f"Local IP fallback approved. Fetching: {target_url[:80]}…")
+            try:
+                async with session.get(
+                    target_url,
+                    headers=config.http_headers,
+                    timeout=aiohttp.ClientTimeout(total=config.timeout_seconds),
+                    ssl=False,
+                    allow_redirects=True,
+                ) as response:
+                    if response.status < 400:
+                        html = await response.text(errors="ignore")
+            except Exception:
+                pass
+            return html
+        else:
+            # User chose cancel — return None, cancel_event handles shutdown
+            return None
+
+    # --- No worker returned HTML but workers still exist (non-rate-limit failures) ---
+    # Only attempt local if user has already approved it
+    if config.allow_local_ip:
         try:
             async with session.get(
                 target_url,
@@ -351,12 +436,24 @@ async def db_writer_loop(db_queue: asyncio.Queue, db_path: str):
                     tbl = values[0]
                     if tbl in allowed:
                         cursor.execute(f"DELETE FROM {tbl}")
+                elif table == "COMMIT":
+                    if pending > 0:
+                        conn.commit()
+                        try:
+                            sync_db(conn)
+                        except NameError:
+                            pass # If sync_db isn't defined, safely ignore
+                        pending = 0
 
-                pending += 1
-                if pending >= BATCH_SIZE:
-                    conn.commit()
-                    sync_db(conn)
-                    pending = 0
+                if table != "COMMIT":
+                    pending += 1
+                    if pending >= BATCH_SIZE:
+                        conn.commit()
+                        try:
+                            sync_db(conn)
+                        except NameError:
+                            pass
+                        pending = 0
 
             except Exception as e:
                 logger.error(f"DB write error [{table}]: {e}")
@@ -389,6 +486,8 @@ async def _crawl_homepage(
     session: aiohttp.ClientSession,
     raw_domain: str,
     config: PipelineConfig,
+    emitter: ProgressEmitter = None,
+    pause_event: asyncio.Event = None,
 ) -> List[Tuple[str, str, str]]:
     """Crawl a single domain's homepage and extract internal links."""
     base_domain = clean_domain_string(raw_domain)
@@ -396,7 +495,7 @@ async def _crawl_homepage(
         return []
 
     target_url = f"https://{base_domain}"
-    html = await fetch_waterfall(session, target_url, config)
+    html = await fetch_waterfall(session, target_url, config, emitter, pause_event)
     if not html:
         return []
 
@@ -425,10 +524,12 @@ async def _scrape_index_page(
     session: aiohttp.ClientSession,
     parent_url: str,
     config: PipelineConfig,
+    emitter: ProgressEmitter = None,
+    pause_event: asyncio.Event = None,
 ) -> List[Tuple[str, str, str]]:
     """Scrape an index page for child job document links."""
     parent_domain = urlparse(parent_url).netloc
-    html = await fetch_waterfall(session, parent_url, config)
+    html = await fetch_waterfall(session, parent_url, config, emitter, pause_event)
     if not html:
         return []
 
@@ -507,7 +608,10 @@ async def _run_worker_pool(
             result_count = 0
             try:
                 async with semaphore:
-                    results = await process_fn(session, item, config)
+                    results = await process_fn(
+                        session, item, config,
+                        emitter=emitter, pause_event=pause_event,
+                    )
                     result_count = len(results)
                     for result in results:
                         await db_queue.put((db_table, result))
@@ -607,8 +711,16 @@ async def run_pipeline(
 
     emitter.pipeline_status("running")
     emitter.log("INFO", "══════════════════════════════════════════════════════")
-    emitter.log("INFO", "SPLECTOR MEGA PIPELINE 3.0 (SQLITE & WORKER POOL)")
+    emitter.log("INFO", "SPLECTOR MEGA PIPELINE 4.0 (WORKER ROTATION)")
     emitter.log("INFO", "══════════════════════════════════════════════════════")
+
+    # --- Initialize worker rotation state ---
+    config._active_workers = list(config.cf_workers)
+    config.allow_local_ip = False
+    emitter.log(
+        "INFO",
+        f"Cloudflare Workers loaded: {len(config._active_workers)} proxies active.",
+    )
 
     # --- Initialize DB queue and writer ---
     db_queue = asyncio.Queue()
@@ -636,6 +748,7 @@ async def run_pipeline(
         await db_queue.put(("clear_stage", ("stage4_final_docs",)))
 
         # Wait for clears to flush
+        await db_queue.put(("COMMIT", None))
         await db_queue.join()
 
         # =====================================================
@@ -727,6 +840,7 @@ async def run_pipeline(
                 )
 
             # Flush all stage 2 writes before reading in stage 3
+            await db_queue.put(("COMMIT", None))
             await db_queue.join()
 
             # Read final count from DB
@@ -769,6 +883,7 @@ async def run_pipeline(
                     await db_queue.put(("stage3_filtered", row))
 
                 # Flush stage 3 writes
+                await db_queue.put(("COMMIT", None))
                 await db_queue.join()
 
                 stats["urls_filtered"] = final_count
@@ -838,6 +953,7 @@ async def run_pipeline(
                 )
 
             # Flush all stage 4 writes
+            await db_queue.put(("COMMIT", None))
             await db_queue.join()
 
             conn_r = get_db_connection(config.abs_db_path)

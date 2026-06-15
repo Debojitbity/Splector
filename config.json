@@ -1,8 +1,11 @@
 {
-  "cf_worker_proxy_url": "https://splector-proxy.debojitdasbity.workers.dev/?target=",
+  "cf_workers": [
+    "https://splector-proxy.debojitdasbity.workers.dev/?target=",
+    "https://summer-glade-b4de.contact-dafee.workers.dev/?target="
+  ],
   "input_excel": "data/links.xlsx",
   "input_sheet": "production",
-  "concurrency_limit": 100,
+  "concurrency_limit": 300,
   "timeout_seconds": 15,
   "db_path": "data/crawler.db",
   "continue_on_stage_error": true,

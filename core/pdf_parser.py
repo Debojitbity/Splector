@@ -22,6 +22,10 @@ import hashlib
 import io
 import logging
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SECRET_TOKEN = os.getenv("CF_TOKEN")
 import re
 import shutil
 from pathlib import Path
@@ -224,9 +228,13 @@ async def download_pdf(
     file_path = os.path.join(config.abs_phase2_pdf_folder, filename)
 
     try:
+        request_headers = dict(config.http_headers)
+        if SECRET_TOKEN:
+            request_headers["x-proxy-token"] = SECRET_TOKEN
+
         async with session.get(
             url,
-            headers=config.http_headers,
+            headers=request_headers,
             timeout=aiohttp.ClientTimeout(total=config.timeout_seconds + 15),
             ssl=False,
             allow_redirects=True,

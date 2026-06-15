@@ -22,7 +22,7 @@ CONFIG_FILE = BASE_DIR / "config.json"
 # =========================================================
 
 SAVEABLE_FIELDS = [
-    "cf_worker_proxy_url",
+    "cf_workers",
     "input_excel",
     "input_sheet",
     "concurrency_limit",
@@ -52,7 +52,12 @@ SAVEABLE_FIELDS = [
 
 @dataclass
 class PipelineConfig:
-    cf_worker_proxy_url: str = ""
+    cf_workers: List[str] = field(
+        default_factory=lambda: [
+            "https://splector-proxy.debojitdasbity.workers.dev/?target=",
+            "https://summer-glade-b4de.contact-dafee.workers.dev/?target=",
+        ]
+    )
     input_excel: str = "data/links.xlsx"
     input_sheet: str = "production"
     concurrency_limit: int = 80
@@ -78,6 +83,8 @@ class PipelineConfig:
     enable_file_downloads: bool = True
 
     # --- Computed at runtime (not saved to config.json) ---
+    allow_local_ip: bool = False
+    _active_workers: List[str] = field(default_factory=list, repr=False)
     http_headers: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self):

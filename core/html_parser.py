@@ -16,6 +16,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SECRET_TOKEN = os.getenv("CF_TOKEN")
 import re
 import shutil
 from datetime import datetime
@@ -121,9 +125,13 @@ async def download_html(
     file_path = os.path.join(config.abs_phase2_html_folder, filename)
 
     try:
+        request_headers = dict(config.http_headers)
+        if SECRET_TOKEN:
+            request_headers["x-proxy-token"] = SECRET_TOKEN
+
         async with session.get(
             url,
-            headers=config.http_headers,
+            headers=request_headers,
             timeout=aiohttp.ClientTimeout(total=config.timeout_seconds),
             ssl=False,
             allow_redirects=True,

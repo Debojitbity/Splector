@@ -69,7 +69,7 @@ def _normalize_urls(db_path: str) -> list[str]:
     cursor = conn.execute(
         "SELECT DISTINCT final_target_url FROM stage4_final_docs "
         "WHERE final_target_url NOT IN ("
-        "SELECT source_url FROM document_refs WHERE processing_status IN ('SUCCESS', 'SEED_METADATA_ONLY', 'REJECTED_UNSUPPORTED'))"
+        "SELECT source_url FROM document_refs WHERE processing_status IN ('SUCCESS', 'SEED_METADATA_ONLY', 'REJECTED_UNSUPPORTED', 'DELETED_MANUALLY'))"
     )
     raw_urls = [row[0] for row in cursor.fetchall() if row[0]]
     conn.close()
@@ -299,14 +299,15 @@ async def run_document_processing(
                     )
 
                     status = record["processing_status"]
-                    if status == "SUCCESS" or status.startswith("REJECTED"):
+                    if status in ("SUCCESS", "SEED_METADATA_ONLY") or status.startswith("REJECTED"):
                         domain_consecutive_errors[domain] = 0
                     else:
-                        domain_consecutive_errors[domain] += 1
-                        if domain_consecutive_errors[domain] >= 5:
-                            if domain not in blacklisted_for_this_run:
-                                blacklisted_for_this_run.add(domain)
-                                emitter.log("WARNING", f"[CIRCUIT BREAKER] Domain {domain} failed 5 times. Skipping remaining URLs for this run.")
+                        if config.enable_file_downloads:
+                            domain_consecutive_errors[domain] += 1
+                            if domain_consecutive_errors[domain] >= 5:
+                                if domain not in blacklisted_for_this_run:
+                                    blacklisted_for_this_run.add(domain)
+                                    emitter.log("WARNING", f"[CIRCUIT BREAKER] Domain {domain} failed 5 times. Skipping remaining URLs for this run.")
 
                     # Push audit record to db_queue
                     await db_queue.put((

@@ -1,7 +1,8 @@
 /data
+/tests
 splector_debug.log
 *.db
 *.sqlite
 .env
 data/crawler.db
-__pycache__/
+*__pycache__/

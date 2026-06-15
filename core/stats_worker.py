@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import os
 import tiktoken
+import time
 from langdetect import detect, DetectorFactory
 
 # Set seed for consistent language detection
@@ -9,7 +10,7 @@ DetectorFactory.seed = 0
 
 def _ensure_schema(db_path: str):
     """Ensure that the database schema is ready for telemetry data."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15.0)
     cursor = conn.cursor()
     
     # 1. Ensure system_stats exists
@@ -32,9 +33,11 @@ def _ensure_schema(db_path: str):
     for col_name, col_type in columns:
         try:
             cursor.execute(f"ALTER TABLE document_refs ADD COLUMN {col_name} {col_type}")
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
             # OperationalError is raised if the column already exists
-            pass
+            if "duplicate column name" not in str(e).lower():
+                import logging
+                logging.getLogger("splector.stats_worker").error(f"Failed to add column {col_name}: {e}")
             
     conn.commit()
     conn.close()
@@ -74,20 +77,114 @@ def _process_file(file_path: str) -> tuple[int, int, str, int]:
         return (0, 0, 'Error', 0)
 
 
-async def run_telemetry_loop(db_path: str, emitter):
+async def sync_filesystem(db_path: str, base_dir: str):
+    """
+    Sweeps the database and checks if physical files still exist.
+    If deleted, marks them as OBSOLETE and recalculates stats.
+    """
+    conn = sqlite3.connect(db_path, timeout=15.0)
+    cursor = conn.cursor()
+    
+    # Select all records where file exists in DB
+    cursor.execute("SELECT record_id, prepared_file_path FROM document_refs WHERE prepared_file_path IS NOT NULL")
+    records = cursor.fetchall()
+    
+    purged_count = 0
+    for record_id, file_path in records:
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(base_dir, file_path)
+            
+        if not os.path.exists(file_path):
+            cursor.execute("""
+                UPDATE document_refs 
+                SET processing_status = 'DELETED_MANUALLY', 
+                    workflow_state = 'OBSOLETE', 
+                    prepared_file_path = NULL, 
+                    word_count = NULL, 
+                    token_count = NULL, 
+                    language = NULL, 
+                    file_size_bytes = NULL 
+                WHERE record_id = ?
+            """, (record_id,))
+            purged_count += 1
+            
+    conn.commit()
+    
+    # If any files were purged, recalculate global stats
+    if purged_count > 0:
+        cursor.execute("""
+            SELECT COUNT(*), SUM(word_count), MIN(word_count), MAX(word_count), 
+                   MIN(token_count), MAX(token_count), MIN(file_size_bytes), MAX(file_size_bytes)
+            FROM document_refs 
+            WHERE word_count IS NOT NULL
+        """)
+        agg = cursor.fetchone()
+        total_files = agg[0] or 0
+        total_words = agg[1] or 0
+        min_words = agg[2] or 0
+        max_words = agg[3] or 0
+        min_tokens = agg[4] or 0
+        max_tokens = agg[5] or 0
+        min_size = agg[6] or 0
+        max_size = agg[7] or 0
+        
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('total_files_processed', ?)", (str(total_files),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('total_word_count', ?)", (str(total_words),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('min_word_count', ?)", (str(min_words),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('max_word_count', ?)", (str(max_words),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('min_token_count', ?)", (str(min_tokens),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('max_token_count', ?)", (str(max_tokens),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('min_file_size', ?)", (str(min_size),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('max_file_size', ?)", (str(max_size),))
+        
+        cursor.execute("""
+            SELECT language, COUNT(*) FROM document_refs 
+            WHERE language IS NOT NULL 
+            GROUP BY language
+        """)
+        langs = cursor.fetchall()
+        
+        lang_counts = {'en': 0, 'hi': 0, 'others': 0}
+        for lang, count in langs:
+            if lang == 'en':
+                lang_counts['en'] += count
+            elif lang == 'hi':
+                lang_counts['hi'] += count
+            else:
+                lang_counts['others'] += count
+                
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('count_english', ?)", (str(lang_counts['en']),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('count_hindi', ?)", (str(lang_counts['hi']),))
+        cursor.execute("INSERT OR REPLACE INTO system_stats (metric_key, metric_value) VALUES ('count_others', ?)", (str(lang_counts['others']),))
+            
+        conn.commit()
+        
+    conn.close()
+
+
+async def run_telemetry_loop(db_path: str, emitter, base_dir: str = None):
     """
     Background daemon that processes downloaded text files for telemetry.
     Maintains a live state in the system_stats table.
     """
+    if base_dir is None:
+        base_dir = os.getcwd()
+        
     # Ensure database schema is ready
     _ensure_schema(db_path)
     
     last_logged_state = None
+    last_sync_time = 0
     
     while True:
         try:
+            # Ghost Purge: Sync filesystem every 15 minutes
+            if time.time() - last_sync_time > 900:
+                await sync_filesystem(db_path, base_dir)
+                last_sync_time = time.time()
+
             # Open DB connection for checking the backlog
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, timeout=15.0)
             cursor = conn.cursor()
             
             # Step A: State & Backlog Tracking
@@ -145,7 +242,7 @@ async def run_telemetry_loop(db_path: str, emitter):
                 word_count, token_count, language, file_size_bytes = await asyncio.to_thread(_process_file, file_path)
                 
                 # Open a new connection per update to avoid holding the lock
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(db_path, timeout=15.0)
                 conn.execute("""
                     UPDATE document_refs 
                     SET word_count = ?, token_count = ?, language = ?, file_size_bytes = ?
@@ -156,7 +253,7 @@ async def run_telemetry_loop(db_path: str, emitter):
                 processed += 1
                 
             # Step C: Global Aggregation
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, timeout=15.0)
             cursor = conn.cursor()
             
             cursor.execute("""
